@@ -1,4 +1,4 @@
-# 多网盘统一下载（cloud-drive-downloader）
+# 网盘通（cloud-drive-downloader）
 
 ## 概述
 
@@ -34,11 +34,50 @@
 python3 scripts/pan.py doctor
 python3 scripts/pan.py init
 python3 scripts/pan.py detect "<网盘分享链接>"
+python3 scripts/pan.py test "<网盘分享链接>" --pwd <提取码>   # 先测试能否下载，不真正下载
 python3 scripts/pan.py get "<网盘分享链接>" --pwd <提取码> --dry-run --json
 python3 scripts/pan.py get "<网盘分享链接>" --pwd <提取码> --to "<用户指定目录>"
 ```
 
-Windows 可在 `scripts` 目录使用 `pan.ps1` 或 `pan.cmd`。首次登录按 `pan.py login <盘名>` 的官方步骤在本机完成；密码不要粘贴到聊天中。
+Windows 可在 `scripts` 目录使用 `pan.ps1` 或 `pan.cmd`。首次登录按 `pan.py login <盘名>` 的官方步骤在本机完成（可加 `--open` 直接打开授权教程）；密码不要粘贴到聊天中。
+
+## 一键启动（网页下载助手）
+
+- `sh scripts/pan_web.sh`：自动启动本机 serve + 全局剪贴板监听 + 打开 Web 首页；剪贴板里出现网盘链接会自动投递并跳转实时进度。
+- 剪贴板监听亦可单独运行：`python3 scripts/clipboard_monitor.py`（macOS/Linux/Windows 均可轮询系统剪贴板，不依赖浏览器）。
+
+## 任务中心 Web UI（v2，支持任务控制）
+
+- `python3 scripts/pan.py serve` 打开 `http://127.0.0.1:17890/`：实时任务、任务控制记录与历史报告统一成一张任务表，每 2 秒自动刷新。
+- 页面入口：`/`（任务中心，首页含「粘贴链接开始下载」表单，提交后自动跳转 `/live` 看实时进度）、`/test`（测试连接，粘贴链接即可检查能否下载）、`/live`（纯实时速度）、`/api/tasks`、`/api/status`、`/api/live`、`/api/reports`、`/api/test?url=...`（测试连接）、`/api/task/action`（暂停/继续/取消/删除/重试）。
+- 命令行控制：`pan task list|show|pause|resume|delete|retry <id>`，运行中可暂停/取消，暂停中可继续/删除，已结束可重试/删除。
+
+## 实时下载速度监控
+
+- `python3 scripts/pan.py get "链接" --live` 会在下载期间实时写入 `下载速度.live.json`（实时/平均速度、已下载字节、当前步骤、状态）。
+- 另开终端执行 `python3 scripts/pan.py serve`，浏览器打开 `http://127.0.0.1:17890/live` 即可看到自动刷新的实时速度；`/api/live` 为 JSON 接口。
+- 采样间隔 `http.live_interval` 默认 1 秒，实时文件可指定目录 `http.live_dir`；配置 `http.live_status: true` 后无需每次加 `--live`。
+
+
+## 智能默认 + 自动重试
+
+- 智能分类归档：`smart.auto_classify` 开启后（`pan set --auto-classify on`），下载前按扩展名自动拆到 影视/音乐/文档/图片/压缩包/其他 目录，避免全堆一个文件夹；单次可用 `get --classify` 手动开启。
+- 自动重试与断点续传：`http.retries`（默认 3）+ curl `-C -` / rclone 断点，失败自愈不用反复手动点。
+
+## Web UI 可安装（PWA）
+
+- 打开 `http://127.0.0.1:17890/` 后，浏览器地址栏会显示“安装”按钮，可安装成独立窗口应用。
+- 清单 `/manifest.webmanifest`、离线外壳 `/sw.js`、图标 `/icons/icon-192.png`、`/icons/icon-512.png`。
+- 仍是仅本机访问：不读取任何网盘登录态或上传云端。
+
+## 浏览器扩展 + 剪贴板监听
+
+- 扩展目录：`extensions/chrome/`（Manifest V3），加载方法见 `extensions/chrome/README.md`。
+- 启动本机服务后（`python3 scripts/pan.py serve`，默认 `127.0.0.1:17890`），Chrome 加载该目录即生效。
+- 复制/选中网盘链接后，右键菜单「发送 网盘链接 到 pan 下载」自动把链接发到本机 `POST /api/download`，由 `pan get --live` 后台下载。
+- 同时监听剪贴板 `copy`、键盘复制和选区变化，自动识别链接；`popup` 可手动粘贴链接并填写提取码、目标目录、引擎/档次。
+- 扩展仅连接 `http://127.0.0.1:17890/*`，不读取网盘页面登录态，也不上传任何云端平台数据。
+- 剪贴板监听默认只自动提取链接文本；提取码不会自动从页面读取，请在弹窗确认或手动填写。
 
 ## 账号等级与速度
 
@@ -54,14 +93,21 @@ Windows 可在 `scripts` 目录使用 `pan.ps1` 或 `pan.cmd`。首次登录按 
 ```bash
 python3 scripts/pan.py remote add nas --kind ssh --host 192.168.1.10 --user lis --root /volume1
 python3 scripts/pan.py remote check nas --probe
-python3 scripts/pan.py remote deploy nas
+python3 scripts/pan.py remote deploy nas                                          # 仅部署
+python3 scripts/pan.py remote deploy nas --web-port 17890                         # 部署+后台启动远程 Web 控制页
 python3 scripts/pan.py remote get nas "<链接>" --pwd <码>
+python3 scripts/pan.py remote web nas                                             # 打印访问地址与 SSH 反向隧道
 
 python3 scripts/pan.py remote add vault --kind webdav --remote-name vault --root /downloads
 python3 scripts/pan.py get "<链接>" --remote vault --dry-run --json
 ```
 
 远程模式不会把本机 `config.json`、密码、Cookie 或 Token 上传到远程设备；远程设备上的登录态也必须在该设备本机保存。
+
+## 飞书机器人（第 3 步）
+
+- `pan notify --channel feishu`：群机器人 Webhook 发送完成/失败通知。
+- `scripts/feishu_bot.py`：飞书事件回调桥，把“发链接→自动下载”转给本机/NAS 的 `serve`；离线自检 `--check`。详见 `references/28-飞书机器人.md`。
 
 ## 安全边界
 
@@ -87,3 +133,16 @@ python3 scripts/pan.py get "<链接>" --remote vault --dry-run --json
 ## 许可
 
 文档与脚本采用 CC BY-NC-SA 4.0，详见 `LICENSE.md`。
+
+
+## 下载后处理链模板（v0.6.1-R4）
+
+- 下载完成后可自动解压/重命名/媒体入库：把 `scripts/post_media.sh` 绝对路径填进 `http.on_complete_hook`：
+  `bash "/绝对路径/scripts/post_media.sh" "{target}" "{drive}" "{engine}" "{report}"`
+- 脚本默认 `AUTO=0`（只预览要做什么），改成 `AUTO=1` 才实际解压；Jellyfin/Emby/Plex 扫描命令在脚本第 2 步注释处配置。
+
+
+### 定时 / 低峰下载（骨架）
+
+- `pan.py get "<链接>" --at 02:30` 会等到达定时间再开始（当前未到）；未指定时读 `http.schedule_at`。
+- 大文件可按 `--at 02:30` 排到凌晨，避开白天带宽高峰（骨架为 CLI 阻塞等待，未接入系统调度器）。

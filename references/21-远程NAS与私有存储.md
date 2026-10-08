@@ -43,7 +43,7 @@ python3 scripts/pan.py remote get vault "<分享链接>"
 
 # 本机已挂载的 SMB / 外接盘，直接写挂载目录
 python3 scripts/pan.py remote add office-disk \
-  --kind mount --root "/Volumes/办公盘"
+  --kind mount --root "/Volumes/PanOffice"
 ```
 
 也可以直接在主命令指定：
@@ -83,3 +83,29 @@ python3 scripts/pan.py remote remove <名称>
 | SMB 盘未出现 | 先在系统挂载，Windows 可用 `net use`，macOS 用 Finder 挂载 |
 | 群晖/飞牛无法 SSH | 改用 WebDAV/SMB/S3 的远程落地模式，或启用设备允许的 SSH |
 | 蒲公英外接盘找不到 | 先建立 VPN，确认网关暴露的是 SMB 还是 WebDAV，再按协议登记 |
+
+## 远程 Web 控制页（第 2 步）
+
+SSH 远程执行模式的设备部署后可在设备上后台启动本技能自带 `serve` Web 页面，手机/浏览器即可查看任务与实时速度，远程控制任务。
+
+```bash
+# A. 部署并同时后台启动 Web 控制页（仅在远程设备本机监听 127.0.0.1）
+python3 scripts/pan.py remote deploy nas --web-port 17890 --dry-run                      # 先看计划
+python3 scripts/pan.py remote deploy nas --web-port 17890                              # 实际部署+启动
+
+# B. 局域网直接访问（远程设备防火墙放行该端口，且监听 0.0.0.0）
+python3 scripts/pan.py remote deploy nas --web-port 17890 --web-host 0.0.0.0
+#    浏览器打开：http://<NAS_IP>:17890/
+
+# C. 仅监听 127.0.0.1 时，本机/外网用 SSH 反向隧道访问
+python3 scripts/pan.py remote web nas
+#    输出并执行：ssh -L 17890:127.0.0.1:17890 lis@<NAS>  （保持终端运行）
+#    本机打开：  http://127.0.0.1:17890/
+```
+
+说明：
+
+- 远程后台启动 `serve` 使用 `--reports-dir <远程 root>`，可自动扫描任务控制记录、实时速度文件与历史报告。
+- Web 控制页支持：任务汇总表、实时速度 `/live`、`POST /api/download` 投递下载、`/api/task/action` 暂停/继续/删除/重试。
+- 日志在远程 `/tmp/pan-remote-web-<名称>.log`；要停用远程 Web，执行 `ssh <user>@<host> "pkill -f 'pan.py serve'"`。
+- `--web-host` 默认 `127.0.0.1`（安全）；填 `0.0.0.0` 会向局域网暴露控制页，请确认防火墙与登录态安全，不要将远程服务直接暴露公网。

@@ -2,17 +2,41 @@
   "version": 5,
   "download_root": "",
   "tier": "auto",
+  "smart": {
+    "auto_classify": true,
+    "classify_root": ""
+  },
   "http": {
     "retries": 3,
     "retry_delay": 5,
     "connect_timeout": 30,
     "timeout": 0,
     "max_connections_free": 1,
-    "max_connections_vip": 4
+    "max_connections_vip": 4,
+    "report_dir": "",
+    "on_complete_hook": "",
+    "range_split": false,
+    "range_split_connections": 0,
+    "live_status": true,
+    "live_interval": 1.0,
+    "live_dir": "",
+    "schedule_at": ""
   },
   "remote": {
     "staging_root": "",
     "keep_staging": false
+  },
+  "transfer": {
+    "allow_company_dest": false,
+    "default_transfers": 4,
+    "default_checkers": 8
+  },
+  "notify": {
+    "work_weixin_secret": "",
+    "bark_secret": "",
+    "telegram_secret": "",
+    "discord_secret": "",
+    "feishu_secret": ""
   },
   "remotes": {},
   "engines": {

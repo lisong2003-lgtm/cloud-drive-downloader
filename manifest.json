@@ -1,6 +1,6 @@
 {
   "name": "cloud-drive-downloader",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "统一从百度、阿里云盘、夸克、天翼、迅雷、115、123云盘、移动云盘、沃盘、UC、PikPak、坚果云、OneDrive/SharePoint、Google Drive、Dropbox、微云、蓝奏及更多网盘下载分享链接、转存文件夹或直链到本机、Windows、NAS 或远程私人存储。",
   "author": "lis",
   "license": "CC-BY-NC-SA-4.0",
