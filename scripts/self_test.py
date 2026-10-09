@@ -585,7 +585,7 @@ def main():
     checks += 5
 
     # 32) 1-4 项优化：后处理链样板 / 扩展弹窗测试连接 / 提取码提示 / --at 定时骨架
-    hook_sh = HERE.parent / "scripts" / "post_media.sh"
+    hook_sh = HERE.parent / "scripts" / "hooks" / "post_media.sh"
     assert hook_sh.exists() and hook_sh.stat().st_mode & 0o111, "后处理链样板脚本缺失/不可执行"
     hook_txt = hook_sh.read_text(encoding="utf-8")
     assert "AUTO=" in hook_txt and "unzip" in hook_txt and "Jellyfin" in hook_txt, "后处理样板内容异常"

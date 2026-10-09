@@ -29,13 +29,13 @@
 
 一键得到注册片段：`python3 scripts/pan.py mcp guide`（加 `--json` 取机器可读）。
 
-注册到 Codex `$CODEX_HOME/config.toml`（`[mcp_servers]` 段）：
+注册到 Codex `~/.codex/config.toml`（`[mcp_servers]` 段）：
 
 ```toml
 [mcp_servers.pan-cloud-drive]
-command = "$CODEX_HOME/skills/cloud-drive-downloader/scripts/pan_mcp.py"
+command = "/Users/lis/.codex/skills/cloud-drive-downloader/scripts/pan_mcp.py"
 enabled = true
-# type 默认 stdio；如被 Agent 配置切换工具 覆盖，需重新注册并重启 App
+# type 默认 stdio；如被 CC Switch 覆盖，需重新注册并重启 App
 ```
 
 注册后需在运行中的 App 重启生效；本机 skill 原版保持完整，平台/App 专用配置不回写 skill。

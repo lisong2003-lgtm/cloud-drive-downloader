@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 APP = "pan-downloader"
 VALID_TIERS = ("free", "vip", "auto")
-KEYCHAIN_SERVICE = "com.example.pan-hub"
+KEYCHAIN_SERVICE = "com.lis.pan-downloader"
 SECURITY_BIN = os.environ.get("PAN_SECURITY_BIN", "/usr/bin/security")
 SKILL_DIR = Path(__file__).resolve().parent.parent
 
@@ -1163,7 +1163,7 @@ def default_root(cfg):
     if configured:
         return Path(os.path.expanduser(configured))
     if platform.system().lower() == "darwin":
-        for vol in ("/Volumes/PanDownloads", "/Volumes/PanOffice"):
+        for vol in ("/Volumes/拓展", "/Volumes/办公"):
             p = Path(vol)
             if p.is_dir() and os.access(str(p), os.W_OK):
                 return p / "网盘下载"
@@ -2890,14 +2890,14 @@ def cmd_mcp_guide(args):
         "ok": ok,
         "script": str(script),
         "config_toml": snippet if ok else "",
-        "note": "加到 $CODEX_HOME/config.toml 后重启 Codex；Agent 配置切换工具 接管可能覆盖，需重新注册",
+        "note": "加到 ~/.codex/config.toml 后重启 Codex；CC Switch 接管可能覆盖，需重新注册",
     }
     if getattr(args, "json", False):
         print(json.dumps(body, ensure_ascii=False, indent=2))
     elif not ok:
         print("❌ 未找到 %s" % script)
     else:
-        print("MCP 注册片段（写入 $CODEX_HOME/config.toml 的 [mcp_servers] 区）：")
+        print("MCP 注册片段（写入 ~/.codex/config.toml 的 [mcp_servers] 区）：")
         print(snippet)
         print("提示：重启 Codex 后在对话里应能看到 pan_doctor / pan_detect / pan_dirs / pan_get_plan")
     return 0 if ok else 1
@@ -3214,7 +3214,7 @@ tr:last-child td{border-bottom:none}
 .card .meta{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.6}
 </style></head><body><div class=wrap>
 <header><h1>⚡ 多网盘实时速度</h1><div class=nav>
-<a href=/>任务中心</a><a href=/api/live>API 实时</a><a href=/api/status>API 状态</a>
+<a href=/guide>使用教程</a><a href=/>任务中心</a><a href=/api/live>API 实时</a><a href=/api/status>API 状态</a>
 </div></header>
 <div class=panel><table>%(content)s</table><div id="CURVE_DATA" style="display:none">%(items_json)s</div></div>
 <script>
@@ -3261,6 +3261,59 @@ tr:last-child td{border-bottom:none}
 </div></body></html>""" % {"content": content, "items_json": items_json})
 
 
+def serve_guide_html():
+    """内置「使用教程」页：新手打开网页即可看到完整操作说明。"""
+    return """<!doctype html><html lang=zh-CN><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>网盘通 · 使用教程</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<script>if('serviceWorker'in navigator){navigator.serviceWorker.register('/sw.js')}</script>
+<style>
+:root{--bg:#0f172a;--panel:#1e293b;--line:#334155;--text:#e2e8f0;--muted:#94a3b8;--acc:#38bdf8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:24px 18px 40px}
+header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+header h1{font-size:20px;margin:0}
+.nav a{color:var(--acc);text-decoration:none;font-size:13px;margin-left:12px}
+.nav a:hover{text-decoration:underline}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:14px;line-height:1.8}
+.card h3{margin:0 0 8px;font-size:15px}
+.step{display:flex;gap:10px;align-items:flex-start;margin:7px 0}
+.num{flex:0 0 22px;height:22px;border-radius:999px;background:var(--acc);color:#052e16;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center}
+code{background:#0b1120;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12px}
+a{color:var(--acc)}
+.ok{color:#4ade80}.warn{color:#fbbf24}.tip{color:var(--muted);font-size:13px}
+</style></head><body><div class=wrap>
+<header><h1>📖 网盘通 · 使用教程</h1><div class=nav>
+<a href=/>任务中心</a><a href=/test>测试连接</a><a href=/live>实时速度</a>
+</div></header>
+
+<div class=card><h3>3 秒学会：复制链接 → 粘贴 → 开始 → 看实时速度</h3>
+<div class="step"><span class=num>1</span><div>复制你想下载的网盘分享链接（可带提取码）。</div></div>
+<div class="step"><span class=num>2</span><div>回到 <a href=/>任务中心</a>，把链接粘贴到「粘贴链接开始下载」输入框。</div></div>
+<div class="step"><span class=num>3</span><div>提取码可不填；目标目录可不填（默认 <code>下载 / Downloads/网盘下载</code>）。</div></div>
+<div class="step"><span class=num>4</span><div>点「开始下载」，网页自动识别网盘类型并开始下载。</div></div>
+<div class="step"><span class=num>5</span><div>打开 <a href=/live>实时速度</a> 页，可看当前速度、平均速度、已下载大小、剩余时间和速度曲线。</div></div>
+</div>
+
+<div class=card><h3>第一次用，先测一下</h3>
+<div class="step"><span class=num>1</span><div>打开 <a href=/test>测试连接</a> 页。</div></div>
+<div class="step"><span class=num>2</span><div>粘贴网盘链接（提取码留空也可以）。</div></div>
+<div class="step"><span class=num>3</span><div>点「开始测试」，几秒内会告诉你这个网盘能不能连、缺什么。</div></div>
+<p class=tip>测试只做本地检查，不会真下载，也不会向你选择的网盘发请求。</p>
+</div>
+
+<div class=card><h3>常见问题</h3>
+<p><b>「提示登录过期」怎么办？</b> 部分网盘首次要官方扫码或网页登录一次，这是官方要求，工具不会绕过。</p>
+<p><b>下载会更快吗？</b> 免费档按网盘官方限速执行，不能承诺更快；会员走本机并发调度。</p>
+<p><b>密码安全吗？</b> 账号/Cookie/OAuth 凭据只存系统钥匙串，不存明文、不进聊天记录、不上传云端。</p>
+<p><b>下载到哪了？</b> 默认 <code>下载 / Downloads/网盘下载</code>；可在「目标目录」填写 NAS、U盘等路径。</p>
+<p><b>卡在某个网盘不会用？</b> 先用「测试连接」，再按它的建议补配置即可。</p>
+</div>
+</div></body></html>"""
+
+
 def pwa_manifest_json():
     """Web 应用清单：让任务中心可被 Chrome/Safari 安装为独立窗口 PWA。"""
     m = {
@@ -3282,7 +3335,7 @@ def pwa_manifest_json():
 def pwa_service_worker_js():
     """离线优先外壳：只缓存首页与实时速度页，读取时仍从服务器取最新数据。"""
     return ("""const CACHE = 'pan-pwa-v1';
-const PAGES = ['/', '/live', '/test'];
+const PAGES = ['/', '/live', '/test', '/guide'];
 self.addEventListener('install', (e) => {
   self.skipWaiting();
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(PAGES)));
@@ -3431,7 +3484,7 @@ footer{margin-top:16px;color:var(--muted);font-size:12px}
 @media(max-width:720px){.cards{grid-template-columns:repeat(2,1fr)}.nav a{margin-left:0;margin-right:10px}}
 </style></head><body><div class=wrap>
 <header><h1>⏬ 多网盘任务中心</h1><div class=nav>
-<a href=/test>测试连接</a><a href=/live>实时速度</a><a href=/api/tasks>API 全部任务</a><a href=/api/status>API 状态</a><a href=/api/live>API 实时</a>
+<a href=/guide>使用教程</a><a href=/test>测试连接</a><a href=/live>实时速度</a><a href=/api/tasks>API 全部任务</a><a href=/api/status>API 状态</a><a href=/api/live>API 实时</a>
 </div></header>
 %(cards)s
 <section id=dl class="panel download">
@@ -3503,7 +3556,7 @@ button:hover{opacity:.9}
 .empty{color:var(--muted);font-size:13px;padding:8px 2px}
 </style></head><body><div class=wrap>
 <header><h1>🧪 多网盘 · 测试连接</h1><div class=nav>
-<a href=/>任务中心</a><a href=/live>实时速度</a>
+<a href=/guide>使用教程</a><a href=/>任务中心</a><a href=/live>实时速度</a>
 </div></header>
 <div class=panel>
 <form id=testForm>
@@ -3730,6 +3783,8 @@ def cmd_serve(args):
                 self._html(serve_live_page_html(body, items_json=items_json))
             elif self.path in ("/test", "/test.html"):
                 self._html(serve_test_html())
+            elif self.path in ("/guide", "/guide.html"):
+                self._html(serve_guide_html())
             elif self.path in ("/", "/index.html"):
                 self._html(serve_home_html(serve_unified_tasks(reports_dir)))
             else:

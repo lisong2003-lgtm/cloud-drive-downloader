@@ -2,12 +2,12 @@
 name: cloud-drive-downloader
 slug: cloud-drive-downloader
 displayName: 网盘通
-version: "0.7.0"
+version: "0.7.1"
 author: lis
 license: CC-BY-NC-SA-4.0
 description: 统一从百度、阿里云盘、夸克、天翼、迅雷、115、123云盘、移动云盘、沃盘、UC、PikPak、坚果云、OneDrive/SharePoint、Google Drive、Dropbox、微云、蓝奏及更多网盘下载分享链接、转存文件夹或直链到本机、Windows、NAS 或远程私有存储。用户只需提供网盘下载地址；技能通过统一命令行和共享下载引擎完成识别、登录引导、目录规划和下载，不必逐个安装各家官方客户端。支持群晖、威联通、飞牛、TrueNAS、Unraid、绿联、极空间、华为家庭存储、蒲公英外接盘等通过 SSH/WebDAV/SMB/S3/rclone/挂载路径接入。免费账号默认单线程+断点续传，账号等级从已配置的可信探测器读取，探测不到按免费处理；会员仅按平台官方权益调整本地并发，不承诺不限速，不绕过平台风控。
 metadata:
-  version: "0.7.0"
+  version: "0.7.1"
 ---
 
 # 多网盘下载
@@ -32,7 +32,7 @@ metadata:
 6. 账号等级默认 `tier=auto`：优先读取 `drives.<盘>.account_tier`；配置了可信 `tier_detector` 时执行探测；全局无法可靠判断时按免费账号处理（并发 1）。不能凭账号名、用户名或链接猜会员。
 7. 会员账号自动提速只做本地调度：aria2 调整 `-x/-s`，rclone 调整 `--transfers`；实际速度仍由各网盘官方规则决定。
 8. 免费账号默认：并发 1、重试 3、断点续传、单任务日志。
-9. 默认下载根目录：macOS 优先 `/Volumes/PanDownloads/网盘下载` 和 `/Volumes/PanOffice/网盘下载`；Windows 为 `%USERPROFILE%\\Downloads\\网盘下载`；其他平台为 `~/Downloads/网盘下载`。用户可用 `pan set --root`、`get --to` 或 `remote` 覆盖。
+9. 默认下载根目录：macOS 优先 `/Volumes/拓展/网盘下载` 和 `/Volumes/办公/网盘下载`；Windows 为 `%USERPROFILE%\\Downloads\\网盘下载`；其他平台为 `~/Downloads/网盘下载`。用户可用 `pan set --root`、`get --to` 或 `remote` 覆盖。
 10. 目录递归下载优先使用 AList + rclone；curl 回退只适合单文件。共享引擎缺失时给出配置说明，不假装成功。
 11. 远程设备按能力接入，不按品牌写死：SSH 适合远程执行，WebDAV/SMB/S3/rclone/已挂载路径适合远程落地。远程部署不上传本机凭据文件。
 
@@ -80,10 +80,10 @@ python3 scripts/pan.py set --alist-url "http://127.0.0.1:5244" --alist-user "ALi
 # 下载
 python3 scripts/pan.py get "https://pan.baidu.com/s/1xxxx" --pwd 1234 --dry-run
 python3 scripts/pan.py get "https://example.com/a.zip"                 # 直链，curl 立即可用
-python3 scripts/pan.py get "<链接>" --to "/Volumes/PanDownloads/资料"           # 指定目录
+python3 scripts/pan.py get "<链接>" --to "/Volumes/拓展/资料"           # 指定目录
 python3 scripts/pan.py get "<链接>" --at 02:30           # 低峰：凌晨两点再开始
 python3 scripts/pan.py get "<链接>" --path "/AList/目标目录"             # AList 目录递归
-# 下载完成钩子（自动解压/媒体入库模板）：scripts/post_media.sh
+# 下载完成钩子（自动解压/媒体入库模板）：scripts/hooks/post_media.sh
 
 # 账号等级
 python3 scripts/pan.py set --tier auto

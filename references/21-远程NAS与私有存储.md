@@ -43,7 +43,7 @@ python3 scripts/pan.py remote get vault "<分享链接>"
 
 # 本机已挂载的 SMB / 外接盘，直接写挂载目录
 python3 scripts/pan.py remote add office-disk \
-  --kind mount --root "/Volumes/PanOffice"
+  --kind mount --root "/Volumes/办公盘"
 ```
 
 也可以直接在主命令指定：

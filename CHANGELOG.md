@@ -56,7 +56,7 @@
 - 新增 R4：`transfer` / `sync` 子命令（rclone 跨盘转存/增量同步，默认 dry-run）、公司目录红线默认拒绝、`sync` 需显式 `--delete + --apply`；新增 `references/24-跨盘转存与同步.md`。
 - 新增 R3：CLI JSON 覆盖补齐（`detect/dirs --json`）+ 最小 stdio MCP 服务器 `scripts/pan_mcp.py`（纯 Python），暴露 `pan_doctor/pan_detect/pan_dirs/pan_get_plan`；新增 `references/23-MCP与Agent接口.md`。注册到 Codex 的 `[mcp_servers]` 需在本机配置，本 skill 原版不含平台配置。
 - 新增 R2：http 直链单文件 Range 分片（`get --split N` / `http.range_split`），服务端不支持时自动回退整文件；分片结果进 `下载报告.json`。
-- 保持 v0.7.0 的既有铁律不变：不绕过限速/风控，凭据不落盘不输出。
+- 保持 v0.6.0 的既有铁律不变：不绕过限速/风控，凭据不落盘不输出。
 
 ## Unreleased（本地迭代 R3）
 
@@ -69,7 +69,7 @@
 
 ## Unreleased（本地迭代 R4）
 
-- 新增下载后处理链样板 `scripts/post_media.sh`：下载完成自动解压 ZIP/TGZ，预留 Jellyfin/Emby/Plex 媒体库扫描命令位；默认 AUTO=0 只预览，改 1 生效。
+- 新增下载后处理链样板 `scripts/hooks/post_media.sh`：下载完成自动解压 ZIP/TGZ，预留 Jellyfin/Emby/Plex 媒体库扫描命令位；默认 AUTO=0 只预览，改 1 生效。
 - 浏览器扩展弹窗新增「测试连接」区块：粘贴链接（可选提取码）直接调用 `/api/test` 显示人话检查结果，不真正下载。
 - 提取码智能提示：百度/夸克/蓝奏/123/微云等常见分享盘未传 `--pwd` 时提前 output 提示，避免下载失败后无头绪。
 - 新增定时/低峰下载骨架：`get --at HH:MM` 或 `http.schedule_at`，到点再开始；dry-run/JSON 不阻塞。
@@ -85,7 +85,7 @@
 
 # Changelog
 
-## 0.7.0 - 2026-09-27
+## 0.6.0 - 2026-09-27
 
 - 新增 `README.md` 概述，明确本 Skill 的功能、支持网盘、远程存储、账号等级、凭据保护和合规边界。
 - 补充市场定位：与 rclone、AList、单网盘工具及 Skill 市场的关系和差异化。

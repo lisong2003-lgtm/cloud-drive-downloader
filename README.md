@@ -1,4 +1,4 @@
-# 网盘通（cloud-drive-downloader）
+# 多网盘统一下载（cloud-drive-downloader）
 
 ## 概述
 
@@ -137,8 +137,8 @@ python3 scripts/pan.py get "<链接>" --remote vault --dry-run --json
 
 ## 下载后处理链模板（v0.6.1-R4）
 
-- 下载完成后可自动解压/重命名/媒体入库：把 `scripts/post_media.sh` 绝对路径填进 `http.on_complete_hook`：
-  `bash "/绝对路径/scripts/post_media.sh" "{target}" "{drive}" "{engine}" "{report}"`
+- 下载完成后可自动解压/重命名/媒体入库：把 `scripts/hooks/post_media.sh` 绝对路径填进 `http.on_complete_hook`：
+  `bash "/绝对路径/scripts/hooks/post_media.sh" "{target}" "{drive}" "{engine}" "{report}"`
 - 脚本默认 `AUTO=0`（只预览要做什么），改成 `AUTO=1` 才实际解压；Jellyfin/Emby/Plex 扫描命令在脚本第 2 步注释处配置。
 
 

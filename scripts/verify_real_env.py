@@ -116,7 +116,7 @@ def check_mcp():
     expected = {"pan_doctor", "pan_detect", "pan_dirs", "pan_get_plan"}
     if not expected.issubset(set(names)):
         return FAIL, "tools/list 缺工具 %s" % sorted(expected - set(names))
-    return PASS, "MCP initialize+tools ok（仍须注册到 $CODEX_HOME/config.toml 后重启 App 实测）"
+    return PASS, "MCP initialize+tools ok（仍须注册到 ~/.codex/config.toml 后重启 App 实测）"
 
 
 def main():

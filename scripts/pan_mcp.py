@@ -8,9 +8,9 @@
   - pan_dirs      : 默认下载目录（JSON）
   - pan_get_plan  : 生成 dry-run 下载计划（JSON，不打码省略凭据）
 
-注册到 Codex（$CODEX_HOME/config.toml）示例：
+注册到 Codex（~/.codex/config.toml）示例：
   [mcp_servers.pan-cloud-drive]
-  command = "$CODEX_HOME/skills/cloud-drive-downloader/scripts/pan_mcp.py"
+  command = "/Users/lis/.codex/skills/cloud-drive-downloader/scripts/pan_mcp.py"
   enabled = true
 
 协议遵循 MCP stdio JSON-RPC：initialize / notifications/initialized / tools/list / tools/call / ping。
