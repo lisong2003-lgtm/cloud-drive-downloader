@@ -1,5 +1,8 @@
 # 多网盘统一下载（cloud-drive-downloader）
 
+> 📦 **SkillHub 安装**：`skillhub install cloud-drive-downloader`　|　仓库：[lisong2003-lgtm/cloud-drive-downloader](https://github.com/lisong2003-lgtm/cloud-drive-downloader)
+
+
 ## 概述
 
 本 Skill 的功能是：让 AI 助手接收用户给出的**网盘分享链接、转存文件夹地址或 HTTP 直链**，自动识别网盘、引导官方登录或授权、规划下载目录，并调用共享下载引擎把资源下载到用户指定的位置。用户不必逐个安装百度、阿里、夸克、天翼、迅雷等官方客户端。
