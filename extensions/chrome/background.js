@@ -1,5 +1,5 @@
-// 后台 service worker：右键菜单 + 桥接到本机 pan serve（127.0.0.1:17890）
-const BASE = "http://127.0.0.1:17890";
+// 后台 service worker：投递到用户配置的任意网盘通服务
+async function getBase() { const d = await chrome.storage.local.get("serverUrl"); const u = (d.serverUrl || "").trim(); return u ? u.replace(/\/$/, "") : "http://127.0.0.1:17890"; }
 const MENU_ID = "pan-dl-send";
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -35,7 +35,7 @@ async function sendToPan(url, opts) {
   if (opts.engine) body.engine = opts.engine;
   if (opts.tier) body.tier = opts.tier;
   if (opts.path) body.path = opts.path;
-  const resp = await fetch(BASE + "/api/download", {
+  const resp = await fetch(await getBase() + "/api/download", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)

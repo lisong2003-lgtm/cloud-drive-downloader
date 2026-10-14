@@ -8,9 +8,9 @@
   - pan_dirs      : 默认下载目录（JSON）
   - pan_get_plan  : 生成 dry-run 下载计划（JSON，不打码省略凭据）
 
-注册到 Codex（~/.codex/config.toml）示例：
+注册到 Codex（<codex-home>/config.toml）示例：
   [mcp_servers.pan-cloud-drive]
-  command = "/Users/lis/.codex/skills/cloud-drive-downloader/scripts/pan_mcp.py"
+  command = "<pan-root>/scripts/pan_mcp.py"
   enabled = true
 
 协议遵循 MCP stdio JSON-RPC：initialize / notifications/initialized / tools/list / tools/call / ping。
@@ -40,6 +40,33 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "type": "object",
             "properties": {"url": {"type": "string", "description": "网盘分享链接或直链"}},
             "required": ["url"],
+        },
+    },
+    "pan_get": {
+        "description": "实际下载（默认 dry_run=true 只出计划）。设 dry_run=false 才真正下载；--json 输出。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "to": {"type": "string", "description": "保存目录（默认配置目录）"},
+                "pwd": {"type": "string"},
+                "engine": {"type": "string"},
+                "tier": {"type": "string", "enum": ["free", "vip", "auto"]},
+                "path": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["url"],
+        },
+    },
+    "pan_task": {
+        "description": "任务控制：list（默认）或 pause/resume/delete/retry + id。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "pause", "resume", "delete", "retry"], "default": "list"},
+                "id": {"type": "string"},
+                "state": {"type": "string", "description": "list 过滤：running/done/failed/paused/cancelled"},
+            },
         },
     },
     "pan_dirs": {
@@ -111,6 +138,32 @@ def call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
             cmd += ["--path", str(args["path"])]
         if args.get("tier"):
             cmd += ["--tier", str(args["tier"])]
+        text, is_err = run_cli(cmd)
+    elif name == "pan_get":
+        cmd = ["get", str(args.get("url", "")), "--json"]
+        if args.get("to"):
+            cmd += ["--to", str(args["to"])]
+        if args.get("pwd"):
+            cmd += ["--pwd", str(args["pwd"])]
+        if args.get("engine"):
+            cmd += ["--engine", str(args["engine"])]
+        if args.get("tier"):
+            cmd += ["--tier", str(args["tier"])]
+        if args.get("path"):
+            cmd += ["--path", str(args["path"])]
+        if not bool(args.get("dry_run", True)):
+            pass  # 真下载：不加 --dry-run
+        else:
+            cmd += ["--dry-run"]
+        text, is_err = run_cli(cmd)
+    elif name == "pan_task":
+        action = str(args.get("action") or "list")
+        if action == "list":
+            cmd = ["task", "--json", "list"]
+            if args.get("state"):
+                cmd += ["--state", str(args["state"])]
+        else:
+            cmd = ["task", action, str(args.get("id", ""))]
         text, is_err = run_cli(cmd)
     elif name == "pan_test":
         cmd = ["test", str(args.get("url", "")), "--json"]

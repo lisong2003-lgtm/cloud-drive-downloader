@@ -1,25 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "多网盘统一下载",
-  "version": "0.1.0",
-  "description": "复制网盘链接后右键发送给本机 pan serve 下载；只连接 127.0.0.1:17890，不上传任何网盘页面数据。",
+  "name": "通用 pan 下载插件",
+  "version": "0.2.0",
+  "description": "把用户提供的链接投递到 pan 服务；支持本机、NAS 或服务器地址，不读取网页登录态。",
   "permissions": ["contextMenus", "storage", "notifications", "clipboardRead", "activeTab"],
-  "host_permissions": ["http://127.0.0.1:17890/*"],
+  "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "background.js" },
-  "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ],
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "多网盘统一下载"
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
+  "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle" }],
+  "action": { "default_popup": "popup.html", "default_title": "通用 pan 下载插件" },
+  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
 }

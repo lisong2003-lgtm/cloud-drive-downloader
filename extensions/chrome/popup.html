@@ -22,6 +22,9 @@
 </head>
 <body>
   <h1>多网盘统一下载</h1>
+  <label>服务地址（本机/NAS/服务器）</label>
+  <input id="serverUrl" placeholder="http://127.0.0.1:17890">
+  <div class="row"><button id="saveServer" style="margin-top:0">保存地址</button><div id="serverMsg" style="align-self:center;font-size:11px"></div></div>
   <label>链接（可粘贴多个，取第一个）</label>
   <textarea id="url"></textarea>
   <div class="row">
@@ -37,7 +40,7 @@
     </select></div>
   </div>
   <button id="start">开始下载</button>
-  <div class="status" id="status">就绪：本机 pan serve 需在 127.0.0.1:17890 运行。</div>
+  <div class="status" id="status">就绪：请先保存你的网盘通服务地址。</div>
   <div class="tbox">
     <h2>测试连接（只读，不下载）</h2>
     <div class="row">
@@ -46,7 +49,7 @@
     </div>
     <div id="tres" style="font-size:12px;margin-top:6px"></div>
   </div>
-  <p style="font-size:11px;color:#888">扩展只连接本机，不读取网盘页面登录态。</p>
+  <p style="font-size:11px;color:#888">扩展只连接你配置的服务，不读取网盘页面登录态。</p>
   <script src="popup.js"></script>
 </body>
 </html>

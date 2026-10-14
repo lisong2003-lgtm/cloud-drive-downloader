@@ -63,7 +63,7 @@ $env:WEBDAV_PASSWORD | .\pan.ps1 secret set engine.webdav --stdin
 Windows 既可以把文件下载到本机，也可以作为远程 NAS 的控制端：
 
 ```powershell
-.\pan.ps1 remote add nas --kind ssh --host 192.168.1.10 --user lis --root /volume1
+.\pan.ps1 remote add nas --kind ssh --host <NAS_IP> --user lis --root <NAS_目录>
 .\pan.ps1 remote check nas --probe
 .\pan.ps1 remote deploy nas
 .\pan.ps1 remote get nas "https://pan.baidu.com/s/xxxx" --pwd 1234

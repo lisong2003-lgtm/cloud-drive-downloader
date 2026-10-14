@@ -13,7 +13,14 @@ import types
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-_PAN_PY = HERE / "pan.py"
+_PAN_PY = HERE / "pancli" / "engine.py"
+_PAN_WEB = HERE / "pancli" / "web.py"
+_PAN_SEARCH = HERE / "pancli" / "search_movie.py"
+_PAN_DOCKER = HERE / "pancli" / "docker.py"
+_PAN_REMOTE = HERE / "pancli" / "remote.py"
+_PAN_CARRIERS = HERE / "pancli" / "carriers.py"
+_PAN_SETUP = HERE / "pancli" / "setup.py"
+_PAN_REPORT = HERE / "pancli" / "report.py"
 TMP = Path(tempfile.mkdtemp(prefix="pan-selftest-"))
 os.environ["PAN_CONFIG"] = str(TMP / "config.json")
 os.environ["PAN_LOG"] = str(TMP / "pan.log")
@@ -21,9 +28,74 @@ os.environ["PAN_STATE_DIR"] = str(TMP / "state")
 
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("pan", HERE / "pan.py")
+    import pancli  # 确保包已注册，子模块共用同一 engine 实例
+    spec = importlib.util.spec_from_file_location("pancli.engine", HERE / "pancli" / "engine.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    sys.modules["pancli.engine"] = mod
+    setattr(pancli, "engine", mod)
+    # 让 pan.* 可见 Web / 搜索 / Docker 子模块函数（保持原有测试/调用习惯）
+    from pancli import web as _web_mod
+    for _web_name in (
+        "read_report_summary", "serve_reports_json", "serve_live_json",
+        "serve_unified_tasks", "_spawn_retry_task", "serve_task_controls",
+        "_locate_task_control", "_apply_task_action", "_spawn_download_task",
+        "serve_live_page_html", "serve_guide_html", "pwa_manifest_json",
+        "pwa_service_worker_js", "pwa_icon_png", "serve_home_html",
+        "serve_test_html", "cmd_serve",
+    ):
+        setattr(mod, _web_name, getattr(_web_mod, _web_name))
+    from pancli import search_movie as _search_mod
+    for _search_name in (
+        "cmd_movie", "cmd_movie_sources", "cmd_movie_get", "cmd_movie_x",
+        "fetch_url", "search_provider_list", "_pick_providers", "search_archive",
+        "search_duckduckgo", "search_ytdlp", "search_candidates", "_absolute_link",
+        "_kind_from_url", "crawl_page_candidates", "dispatch_chosen_download",
+        "cmd_crawl", "cmd_search",
+    ):
+        setattr(mod, _search_name, getattr(_search_mod, _search_name))
+    from pancli import docker as _docker_mod
+    for _docker_name in (
+        "cmd_docker", "cmd_docker_check", "cmd_probe", "cmd_search_check",
+        "docker_assets_dir", "docker_runtime_available", "run_curl_split",
+    ):
+        setattr(mod, _docker_name, getattr(_docker_mod, _docker_name))
+    from pancli import remote as _remote_mod
+    for _remote_name in (
+        "REMOTE_KINDS", "normalize_remote_kind", "remote_entry", "validate_remote_profile",
+        "remote_ssh_argv", "remote_scp_argv", "remote_display", "remote_rclone_destination",
+        "remote_task_name", "build_ssh_remote_plan", "build_remote_sink_plan", "build_remote_plan",
+        "create_remote_deploy_archive", "remote_web_access", "build_remote_deploy_plan",
+        "_remote_public", "cmd_remote_add", "cmd_remote_list", "cmd_remote_remove",
+        "_remote_checks", "cmd_remote_check", "cmd_remote_deploy", "cmd_remote_web",
+        "_plan_dirs", "cmd_remote_get",
+    ):
+        setattr(mod, _remote_name, getattr(_remote_mod, _remote_name))
+    from pancli import carriers as _carrier_mod
+    for _carrier_name in (
+        "COMPANY_DEST_MARKERS", "is_company_destination", "scan_transfer_dest_guard",
+        "_transfer_args", "run_transfer_sync", "cmd_transfer", "cmd_sync",
+        "notify_webhook_url", "build_notify_payload", "cmd_notify_send",
+        "_wait_schedule", "cmd_get", "_task_reports_dir", "cmd_task", "cmd_dirs",
+        "cmd_direct",
+    ):
+        setattr(mod, _carrier_name, getattr(_carrier_mod, _carrier_name))
+    from pancli import setup as _setup_mod
+    for _setup_name in (
+        "ENV_HINT_CMDS", "env_install_hints", "cmd_init_wizard", "INSTALL_CMDS",
+        "detect_pkg_manager", "setup_install_plan", "cmd_setup", "cmd_mcp_guide",
+        "cmd_doctor", "platform_setup_hints", "apply_deployment",
+    ):
+        setattr(mod, _setup_name, getattr(_setup_mod, _setup_name))
+    from pancli import report as _report_mod
+    for _report_name in (
+        "report_path_for_target", "write_download_report", "run_completion_hook",
+        "LIVE_FILE_NAME", "live_file_for", "LiveMonitor", "TASK_FILE_NAME",
+        "_task_file_for_dir", "read_task_records", "_atomic_write_json",
+        "task_control_file_for", "_task_id", "TaskControl", "_signal_group",
+        "_terminate_group", "_wait_controlled", "_run_step_controlled",
+    ):
+        setattr(mod, _report_name, getattr(_report_mod, _report_name))
     return mod
 
 
@@ -36,6 +108,7 @@ def capture_call(func, *args, **kwargs):
 
 def main():
     pan = load_module()
+    from pancli import search_movie as _sm
     checks = 0
 
     # 1) 链接识别：首批 + 常用扩展网盘 + 自定义扩展
@@ -71,6 +144,10 @@ def main():
         ("https://shandianpan.com/s/abc123", "shandian"),
         ("https://www.ctfile.com/f/abc123", "chengtong"),
         ("https://example.com/file.zip", "direct"),
+        ("https://www.youtube.com/watch?v=abc", "stream"),
+        ("https://www.bilibili.com/video/BV1xx411c7mD", "stream"),
+        ("https://cdn.example.com/live/index.m3u8", "stream"),
+        ("https://www.example.com/hls/live.mpd", "stream"),
     ]
     for url, expected in cases:
         got, spec = pan.detect_drive(url)
@@ -78,9 +155,13 @@ def main():
         assert spec.get("name"), "drive %s 缺少 name" % got
         checks += 1
 
-    # 2) 未知非 http 链接
-    assert pan.detect_drive("ftp://x")[0] == "", "ftp 不应被识别"
-    checks += 1
+    # 2) 多协议直链 / 磁力 / BT 识别
+    assert pan.detect_drive("ftp://ftp.example.com/a.zip")[0] == "direct", "ftp 应识别为直链"
+    assert pan.detect_drive("ftps://s.example.com/a.zip")[0] == "direct", "ftps 应识别为直链"
+    assert pan.detect_drive("magnet:?xt=urn:btih:abc123")[0] == "bittorrent", "磁力链接应识别为 BT"
+    assert pan.detect_drive("https://example.com/a.torrent")[0] == "bittorrent", ".torrent 应识别为 BT"
+    assert pan.detect_drive("/tmp/a.torrent")[0] == "bittorrent", "本机 .torrent 应识别为 BT"
+    checks += 5
 
     # 3) 文件名与 slug 清洗
     assert pan.sanitize('a/b:c*?"<>|') == "a_b_c" + "_" * 6
@@ -114,6 +195,26 @@ def main():
     argv = plan["steps"][0]["argv"]
     assert argv[0] == "curl" and "-C" in argv and argv[-1].endswith("b.zip")
     checks += 1
+
+    # 6b) 磁力/BT 计划：优先走 aria2，缺 aria2 时报缺失
+    p_bt = pan.build_plan("magnet:?xt=urn:btih:abc123", cfg=cfg)
+    assert p_bt["drive"] == "bittorrent" and p_bt["engine"] == "aria2", p_bt
+    if p_bt["missing"]:
+        assert "aria2c" in p_bt["missing"], p_bt["missing"]
+    else:
+        assert os.path.basename(p_bt["steps"][0]["argv"][0]) == "aria2c", p_bt["steps"][0]["argv"]
+    assert "--enable-dht=true" in p_bt["steps"][0]["argv"], p_bt["steps"][0]["argv"]
+    p_torrent = pan.build_plan("https://example.com/a.torrent", cfg=cfg)
+    assert p_torrent["drive"] == "bittorrent" and p_torrent["engine"] == "aria2", p_torrent
+    assert p_torrent["steps"][0]["argv"][-1].endswith("a.torrent"), p_torrent["steps"][0]["argv"]
+    checks += 4
+
+    # 6c) 流媒体计划：走 yt-dlp
+    p_stream = pan.build_plan("https://www.bilibili.com/video/BV1xx411c7mD", cfg=cfg)
+    assert p_stream["drive"] == "stream" and p_stream["engine"] == "ytdlp", p_stream
+    assert "--concurrent-fragments" in p_stream["steps"][0]["argv"], p_stream["steps"][0]["argv"]
+    assert "yt-dlp" in p_stream["steps"][0]["argv"][0] or "yt-dlp" in p_stream["missing"], p_stream
+    checks += 3
 
     # 7) 百度分享计划（未装引擎时给缺失项和两步计划）
     p2 = pan.build_plan("https://pan.baidu.com/s/1abc", pwd="1234", cfg=cfg)
@@ -191,6 +292,7 @@ def main():
     # 13) VIP 参数只影响并发，不做绕过
     cfg3 = json.loads(json.dumps(cfg))
     cfg3["http"]["max_connections_vip"] = 4
+    cfg3.setdefault("bt", {})["connections_vip"] = 0
     p4 = pan.build_plan("https://example.com/x.bin", cfg=cfg3, engine="aria2", tier="vip")
     if p4["missing"]:
         assert p4["missing"] == ["aria2c"]
@@ -414,7 +516,7 @@ def main():
         assert pid == "12345", pid
         av = captured.get("argv") or []
         extra = set(av[4:])
-        assert av[:4] == [sys.executable, str(Path(pan.__file__).resolve()), "get", "https://example.com/movie.zip"]
+        assert av[:4] == [sys.executable, str((HERE / "pancli" / "web.py").resolve()), "get", "https://example.com/movie.zip"]
         assert {"--pwd", "ab12", "--to", "/tmp/out", "--engine", "alist", "--tier", "free", "--path", "share/folder"} <= extra, av
         # 空链接不启动子进程
         pid2, err2 = pan._spawn_download_task("   ")
@@ -436,7 +538,7 @@ def main():
     mf = json.loads(mf_path.read_text(encoding="utf-8"))
     assert mf["manifest_version"] == 3, mf.get("manifest_version")
     hp = mf.get("host_permissions") or []
-    assert hp and all(str(h).startswith("http://127.0.0.1:17890") for h in hp), hp
+    assert hp and all(str(h).startswith("http") for h in hp), hp
     for fn in ("background.js", "content.js", "popup.js", "popup.html", "README.md"):
         assert (ex / fn).exists(), "缺少 %s" % fn
     # JS 基础语法：优先 node --check，无 node 时做括号平衡检查
@@ -476,7 +578,7 @@ def main():
 
     # 27) 任务中心首页 HTML 回归：width:100%% 必须转义，空任务与有任务都能渲染
     html0 = pan.serve_home_html([])
-    assert "多网盘任务中心" in html0 and "暂无任务" in html0
+    assert "网盘通控制台" in html0 and "暂无任务" in html0
     assert "width:100%" in html0, "页面 CSS 应输出 width:100%"
     sample_task = {
         "id": "T-1", "drive_name": "百度网盘", "drive": "baidu", "current_step": "下载中",
@@ -484,8 +586,8 @@ def main():
         "engine": "alist", "updated": "2026-10-08 16:00", "finished": ""
     }
     html1 = pan.serve_home_html([sample_task])
-    assert "多网盘任务中心" in html1 and "百度网盘" in html1 and "12.5" in html1
-    assert "暂停" in html1 and "取消" in html1
+    assert "网盘通控制台" in html1 and "12.5" in html1 and "bar" in html1
+    assert "暂停" in html1 and "删除" in html1
     # 有任务时 CSS 中的 % 不会当作格式化占位符
     assert "width:100%" in html1
     assert html1.count("%s") == 0, "模板不应残留未替换 %s"
@@ -579,7 +681,7 @@ def main():
     assert "fetch('/api/test?'" in pan.serve_test_html(), "测试页缺少 /api/test 调用"
     assert pan.serve_test_html().count("%s") == 0, "测试页不应残留未替换 %s"
     assert "caches.open(CACHE)" in pan.pwa_service_worker_js() and "'/test'" in pan.pwa_service_worker_js(), "PWA 缓存未含 /test"
-    assert '"/test"' in _PAN_PY.read_text(encoding='utf-8') or "'/test'" in _PAN_PY.read_text(encoding='utf-8'), "serve 路由未注册 /test"
+    assert '"/test"' in (_PAN_PY.read_text(encoding='utf-8') + _PAN_WEB.read_text(encoding='utf-8')) or "'/test'" in (_PAN_PY.read_text(encoding='utf-8') + _PAN_WEB.read_text(encoding='utf-8')), "serve 路由未注册 /test"
     rc, out = capture_call(pan.cmd_test, types.SimpleNamespace(url="https://example.com/a.zip", json=True, pwd="", engine="", tier="", path=""))
     assert rc == 0 and json.loads(out)["ok"] is True, (rc, out)
     checks += 5
@@ -605,12 +707,13 @@ def main():
     checks += 6
 
     # 33) 第 1 步：网页/Agent 一站式——首页下载表单、剪贴板监听、一键启动脚本
-    home2 = pan.serve_home_html([])
-    assert "dlStart" in home2 and "dlUrl" in home2 and "/api/download" in home2, "首页缺下载表单"
-    assert "location.href='/live'" in home2, "首页投递后应跳转 /live"
+    from pancli import web as _web_mod
+    home2 = _web_mod.serve_home_html([])
+    assert "start" in home2 and "url" in home2 and "/api/download" in home2 and "批量下载" in home2, "首页缺下载表单"
+    assert "render" in home2 and "/api/tasks" in home2, "首页投递后应刷新任务"
     # /api/download 返回 live_url / home_url 字段（在 do_POST 代码里检查真实字符串）
-    assert 'live_url' in _PAN_PY.read_text(encoding="utf-8"), "pan.py 缺 live_url 响应字段"
-    assert 'home_url' in _PAN_PY.read_text(encoding="utf-8"), "pan.py 缺 home_url 响应字段"
+    assert 'live_url' in _PAN_WEB.read_text(encoding="utf-8"), "web.py 缺 live_url 响应字段"
+    assert 'home_url' in _PAN_WEB.read_text(encoding="utf-8"), "web.py 缺 home_url 响应字段"
     clip = HERE / "clipboard_monitor.py"
     assert clip.exists(), "剪贴板监听脚本缺失"
     clip_txt = clip.read_text(encoding="utf-8")
@@ -632,8 +735,11 @@ def main():
 
     # 34) 第 2 步：远程 NAS 常驻 + 网页控制——remote deploy 支持 --web-port、远程启动 serve、remote web 帮助
     _code = _PAN_PY.read_text(encoding="utf-8")
-    for token in ("remote_web_access", "build_remote_deploy_plan", "--web-port", "--web-host", "--web-reports-dir"):
+    _code_remote = _PAN_REMOTE.read_text(encoding="utf-8")
+    for token in ("--web-port", "--web-host", "--web-reports-dir"):
         assert token in _code, "pan.py 缺 %s" % token
+    for token in ("remote_web_access", "build_remote_deploy_plan"):
+        assert token in _code_remote, "remote.py 缺 %s" % token
     entry = {"kind": "ssh", "host": "192.168.1.10", "user": "lis", "root": "/volume1", "python": "python3", "deploy_dir": ".pan-downloader"}
     entry["name"] = "nas"
     archive = TMP / "deploy.tar.gz"
@@ -666,7 +772,8 @@ def main():
     # 35) 第 3 步：飞书机器人——notify 支持 feishu、桥接脚本存在且自检通过
     code3 = _PAN_PY.read_text(encoding="utf-8")
     assert '"feishu_secret"' in code3 and "feishu_secret" in _PAN_PY.read_text(encoding="utf-8"), "pan.py 缺 feishu_secret"
-    assert "channel == \"feishu\"" in code3 or 'channel == "feishu"' in code3, "build_notify_payload 缺 feishu"
+    code_carrier = _PAN_CARRIERS.read_text(encoding="utf-8")
+    assert "channel == \"feishu\"" in code_carrier or 'channel == "feishu"' in code_carrier, "carriers.py 缺 feishu"
     assert 'choices=["work_weixin", "bark", "telegram", "discord", "feishu"]' in code3, "notify 通道未加 feishu"
     fb = HERE / "feishu_bot.py"
     assert fb.exists(), "飞书桥 feishu_bot.py 缺失"
@@ -687,7 +794,277 @@ def main():
     checks += 14
 
 
+    # 40) 最快链接测速（离线模拟 dummy curl）
+    _sub_module = pan.subprocess
+    orig_run = pan.subprocess.run
+    calls = {"n": 0}
+    def _dummy_run(argv, **kw):
+        calls["n"] += 1
+        from types import SimpleNamespace
+        if "-o" in argv:
+            out = Path(argv[argv.index("-o") + 1])
+            out.write_bytes(b"a" * 100_000)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    pan.subprocess.run = _dummy_run
+    try:
+        ranked = pan.rank_fastest_urls(["https://m1.example/f.bin", "https://m2.example/f.bin"], cfg=cfg, timeout=1, samples=100000)
+        assert len(ranked) == 2 and all(r["ok"] for r in ranked), ranked
+        assert all("kbps" in r and "url" in r for r in ranked), ranked
+    finally:
+        pan.subprocess.run = orig_run
+    checks += 3
+
+    # 41) movie 子命令：免费电影源 / 最快候选 / X(推特) 视频（离线 mock，不真下载）
+    rc, out = capture_call(pan.cmd_movie_sources, types.SimpleNamespace(json=True))
+    assert rc == 0 and '"sources"' in out and 'archive.org' in out, "movie sources 未输出 JSON 源列表"
+    for u in ("https://x.com/i/status/123", "https://twitter.com/some/status/123", "https://mobile.twitter.com/a/status/123"):
+        assert pan.detect_drive(u)[0] == "stream", u + " 未识别为 stream"
+    _orig_find = _sm.find_engine_binary
+    _sm.find_engine_binary = lambda engine, cfg, **kw: "/tmp/fake-yt-dlp"
+    try:
+        xargs = types.SimpleNamespace(url="https://x.com/i/status/123", remote="", to=None, tier=None,
+                                      dry_run=True, force=False, json=True, live=False, classify=None)
+        rc, out = capture_call(pan.cmd_movie_x, xargs)
+        assert rc == 0, "movie x --dry-run 失败: " + out
+        assert "yt-dlp" in out or "plan" in out.lower(), "movie x 未输出 yt-dlp 计划"
+    finally:
+        _sm.find_engine_binary = _orig_find
+    orig_rank = _sm.rank_fastest_urls
+    fast = {"ok": True, "url": "https://fast.example/movie.mp4", "kbps": 9999.0}
+    slow = {"ok": False, "url": "https://slow.example/movie.mp4", "error": "timeout"}
+    _sm.rank_fastest_urls = lambda urls, cfg=None, timeout=6, samples=200000: [fast, slow]
+    try:
+        gargs = types.SimpleNamespace(url="https://slow.example/movie.mp4", candidates="https://fast.example/movie.mp4",
+                                      remote="", to=None, engine=None, tier=None, path=None, timeout=6, samples=200000,
+                                      dry_run=True, force=False, json=True, events=False, live=False, split=0, at="", classify=None)
+        rc, out = capture_call(pan.cmd_movie_get, gargs)
+        assert rc == 0, "movie get --dry-run 失败: " + out
+        assert "fast.example/movie.mp4" in out, "movie get 未选用最快候选链接"
+    finally:
+        _sm.rank_fastest_urls = orig_rank
+    code41 = _PAN_PY.read_text(encoding="utf-8")
+    assert 'movie_sub.add_parser("sources"' in code41, "movie sources 未注册"
+    assert 'movie_sub.add_parser("get"' in code41, "movie get 未注册"
+    assert 'movie_sub.add_parser("x"' in code41, "movie x 未注册"
+    checks += 12
+
+    # 42) 搜索候选：离线 mock http/yt-dlp，验证 search 命令与候选解析 / Docker 文件生成
+    _orig_fetch = _sm.fetch_url
+    def _fake_fetch(url, timeout=20, cfg=None):
+        if "advancedsearch.php" in url:
+            return json.dumps({"response": {"docs": [{"identifier": "public_movie_01", "title": "公开电影示例"}]}})
+        if "html.duckduckgo.com" in url:
+            return '<a href="https://example.com/sample.mp4">示例</a>'
+        raise OSError("no network")
+    _sm.fetch_url = _fake_fetch
+    try:
+        _old_find = _sm.find_engine_binary
+        _sm.find_engine_binary = lambda engine, cfg: "/tmp/fake-yt-dlp"
+        _old_run = pan.subprocess.run
+        pan.subprocess.run = lambda argv, capture_output=True, text=True, timeout=20: types.SimpleNamespace(
+            returncode=0, stdout="vid1\tdemo video\thttps://www.youtube.com/watch?v=vid1\n", stderr="")
+        try:
+            cands = pan.search_candidates("matrix", kind="movie", providers=["archive"], cfg={})
+            assert cands and cands[0]["provider"] == "archive" and "public_movie_01" in cands[0]["url"], cands
+            cands2 = pan.search_candidates("demo", kind="video", providers=["ytdlp"], cfg={})
+            assert cands2 and cands2[0]["url"] and "youtube.com" in cands2[0]["url"], cands2
+            cands3 = pan.search_candidates("sample", kind="file", providers=["duckduckgo"], cfg={})
+            assert cands3 and cands3[0]["url"] == "https://example.com/sample.mp4", cands3
+            sp = pan.build_parser()
+            args = sp.parse_args(["search", "matrix", "--kind", "movie", "--json"])
+            assert getattr(args.func, "_lazy_func", None) == "cmd_search" and args.kind == "movie"
+            dout = TMP / "docker-out"
+            dargs = types.SimpleNamespace(docker_cmd="files", out=str(dout), json=False)
+            rc = pan.cmd_docker(dargs)
+            assert rc == 0 and (dout / "Dockerfile").exists()
+            dfile = (dout / "Dockerfile").read_text(encoding="utf-8")
+            for token in ("FROM python:3.11-slim", "aria2", "yt-dlp", "17890", "ENTRYPOINT"):
+                assert token in dfile, token
+            assert "docker compose up -d" in (dout / "install.sh").read_text(encoding="utf-8")
+        finally:
+            pan.subprocess.run = _old_run
+            pan.find_engine_binary = _old_find
+    finally:
+        _sm.fetch_url = _orig_fetch
+    code42 = _PAN_PY.read_text(encoding="utf-8")
+    assert 'sub.add_parser("search"' in code42 and 'sub.add_parser("docker"' in code42
+    checks += 14
+
+    # 43) 搜索连通性检测 + 网页候选授权确认 + Docker check（离线 mock）
+    _orig_fetch2 = _sm.fetch_url
+    def _fake_fetch2(url, timeout=20, cfg=None):
+        if "html.duckduckgo.com" in url:
+            return '<a href="https://example.com/sample.mp4">示例</a>'
+        if "advancedsearch.php" in url:
+            return json.dumps({"response": {"docs": [{"identifier": "a1", "title": "t"}]}})
+        return "ok"
+    _sm.fetch_url = _fake_fetch2
+    try:
+        rc, out = capture_call(pan.cmd_search_check, cfg={}, kind="movie", timeout=1, json_flag=True)
+        assert rc == 0 and '"ok": true' in out and '"provider"' in out, out
+        # 网页候选未确认授权时应拒绝下载且返回确认码 3
+        webargs = types.SimpleNamespace(query="x", kind="file", providers="duckduckgo", limit=3, timeout=1,
+                                        list_providers=False, json=False, check=False, assume_own=False,
+                                        pick=1, remote="", to=None, engine=None, tier=None, path=None,
+                                        dry_run=False, force=False, live=False, split=0, classify=None)
+        rc, out = capture_call(pan.cmd_search, webargs)
+        assert rc == 3 and "assume-own" in out, (rc, out)
+        # 加了 --assume-own 后 dry-run 才放行进入下载计划
+        webargs_ok = types.SimpleNamespace(**{**vars(webargs), "assume_own": True, "dry_run": True})
+        rc, out = capture_call(pan.cmd_search, webargs_ok)
+        assert rc == 0, (rc, out)
+    finally:
+        _sm.fetch_url = _orig_fetch2
+    # Docker check：mock 无 docker 时也能验证生成文件完整性与不可用提示
+    _orig_which = pan.shutil.which
+    pan.shutil.which = lambda name: "" if name in ("docker", "podman") else _orig_which(name)
+    try:
+        dout = TMP / "docker-check-out"
+        dargs = types.SimpleNamespace(docker_cmd="files", out=str(dout), json=False)
+        pan.cmd_docker(dargs)
+        dargs2 = types.SimpleNamespace(docker_cmd="check", out=str(dout), json=True)
+        rc, out = capture_call(pan.cmd_docker, dargs2)
+        assert rc == 2 and '"docker": null' in out, (rc, out)
+        assert (dout / "Dockerfile").exists() and (dout / "docker-compose.yml").exists()
+    finally:
+        pan.shutil.which = _orig_which
+    code43 = _PAN_PY.read_text(encoding="utf-8")
+    code_docker = _PAN_DOCKER.read_text(encoding="utf-8")
+    for token in ("--check", "--assume-own"):
+        assert token in code43, token
+    for token in ("cmd_docker_check", "docker_runtime_available"):
+        assert token in code_docker, token
+    checks += 18
+
+    # 43b) 网络爬虫：单页提取 + 相对链接 + magnet/torrent 分类 + --pick --dry-run
+    _orig_fetch3 = _sm.fetch_url
+    def _fake_fetch3(url, timeout=20, cfg=None):
+        if "gallery.example.com" in url:
+            return (
+                '<html><body>'
+                '<a href="/movie/001.mp4">公映电影A</a>'
+                '<a href="music/02.flac">无损音乐B</a>'
+                '<a href="https://dl.example.com/doc/说明.pdf">说明书C</a>'
+                '<a href="webr/segment.m3u8">直播流D</a>'
+                '<a href="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567">磁力E</a>'
+                '<a href="torrent/film.torrent">种子F</a>'
+                '<a href="/">首页</a>'
+                '</body></html>'
+            )
+        raise OSError("no network")
+    _sm.fetch_url = _fake_fetch3
+    try:
+        got = pan.crawl_page_candidates("https://gallery.example.com/index.html", limit=20, cfg={})
+        urls = [c["url"] for c in got]
+        for expect in ("https://gallery.example.com/movie/001.mp4",
+                       "https://gallery.example.com/music/02.flac",
+                       "https://dl.example.com/doc/说明.pdf",
+                       "https://gallery.example.com/webr/segment.m3u8",
+                       "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                       "https://gallery.example.com/torrent/film.torrent"):
+            assert expect in urls, (expect, urls)
+        movie = pan.crawl_page_candidates("https://gallery.example.com/", limit=20, cfg={}, kind="movie")
+        assert all(c["kind"] == "movie" for c in movie) and movie, movie
+        music = pan.crawl_page_candidates("https://gallery.example.com/", limit=20, cfg={}, kind="music")
+        assert all(c["kind"] == "music" for c in music) and music, music
+        assert got[0]["kind"] in ("torrent", "video", "movie"), got[0]
+        # crawl 网页候选未确认授权应返回 3
+        cargs = types.SimpleNamespace(url="https://gallery.example.com/", kind="auto", limit=20, timeout=1,
+                                      depth=0, json=False, assume_own=False, pick=1, remote="", to=None,
+                                      engine=None, tier=None, path=None, dry_run=False, force=False,
+                                      live=False, split=0, classify=None)
+        rc, out = capture_call(pan.cmd_crawl, cargs)
+        assert rc == 3 and "assume-own" in out, (rc, out)
+        # --dry-run 放行，直接打印下载计划
+        cargs_dry = types.SimpleNamespace(**{**vars(cargs), "dry_run": True})
+        rc, out = capture_call(pan.cmd_crawl, cargs_dry)
+        assert rc == 0, (rc, out)
+        # JSON 模式
+        cargs_json = types.SimpleNamespace(**{**vars(cargs), "json": True, "pick": 0})
+        rc, out = capture_call(pan.cmd_crawl, cargs_json)
+        assert rc == 0 and '"provider": "crawl"' in out, (rc, out[:300])
+        # 命令行已注册 crawl
+        sp = pan.build_parser()
+        a2 = sp.parse_args(["crawl", "https://gallery.example.com/", "--kind", "video", "--json"])
+        assert getattr(a2.func, "_lazy_func", None) == "cmd_crawl" and a2.kind == "video"
+    finally:
+        _sm.fetch_url = _orig_fetch3
+    code43b = _PAN_PY.read_text(encoding="utf-8") + _PAN_SEARCH.read_text(encoding="utf-8")
+    for token in ("def cmd_crawl", "def crawl_page_candidates", "dispatch_chosen_download", "p_crawl"):
+        assert token in code43b, token
+    checks += 14
+
+    # 44) 真机回归脚本已接入搜索源连通性检查（--only search）
+    _vfy = (HERE.parent / "scripts" / "verify_real_env.py").read_text(encoding="utf-8")
+    for token in ("def check_search", "search-sources", "--only", "search --check"):
+        assert token in _vfy, "verify_real_env.py 缺 %s" % token
+    checks += 4
+
+    # 61) v0.14 通用调度层：本机优先、三入口、三系统、三部署模式、插件一致性
+    skill_root = HERE.parent
+    universal_files = [
+        skill_root / "SKILL.md",
+        skill_root / "README.md",
+        skill_root / "extensions/chrome/README.md",
+        skill_root / "references/23-MCP与Agent接口.md",
+    ]
+    universal_text = "\n".join(p.read_text(encoding="utf-8") for p in universal_files)
+    for tok in ("通用下载调度层", "Agent / MCP / CLI", "Web UI", "浏览器插件",
+                "<api-url>", "<download-dir>", "<port>", "<pan-root>",
+                "macOS Keychain", "Windows Credential Manager", "secret-tool",
+                "pan_get", "pan_task", "pan_get_plan"):
+        assert tok in universal_text, "通用文档缺 %s" % tok
+    assert (skill_root / "SKILL.md").read_text(encoding="utf-8").startswith("---\nname:"), "SKILL front matter 异常"
+    readme_head = (skill_root / "README.md").read_text(encoding="utf-8")
+    assert "通用下载调度层" in readme_head.split("\n", 1)[0] or "\n通用下载调度层" in readme_head[:500], "README 未以通用调度层开场"
+    assert ("192.168.1." + "240") not in universal_text, "通用文档残留私有地址"
+    # 代码与核心文档均不保留私人 NAS 地址
+    private_text = []
+    for p0 in skill_root.rglob("*"):
+        if not p0.is_file() or "tools" in p0.parts or ".git" in p0.parts:
+            continue
+        try:
+            private_text.append(p0.read_text(encoding="utf-8"))
+        except UnicodeDecodeError:
+            pass
+    assert all(("192.168.1." + "240") not in t and ("/volume1/docker/" + "cdd") not in t for t in private_text), "残留私人地址"
+    # 插件名称与地址说明一致
+    ex_dir = skill_root / "extensions" / "chrome"
+    mf0 = json.loads((ex_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "通用 pan 下载插件" in mf0["name"], mf0["name"]
+    ext_readme = (ex_dir / "README.md").read_text(encoding="utf-8")
+    for tok in ("本机", "NAS", "服务器", "Chrome 安装", "Edge 安装", "测试连接", "不读取网页登录态"):
+        assert tok in ext_readme, "插件 README 缺 %s" % tok
+    # 三模式配置生成
+    dep_cfg = {}
+    for mode, expected_host in (("local", "127.0.0.1"), ("nas_docker", "<nas>"), ("server_docker", "<server>")):
+        c0 = dict(dep_cfg)
+        args0 = types.SimpleNamespace(mode=mode, port=17890, host=expected_host, api_url="", root="<download-dir>",
+                                      alist_url="", rclone_remote="")
+        c0 = pan.apply_deployment(c0, args0)
+        assert c0["deployment"]["mode"] == mode, (mode, c0["deployment"])
+        assert c0["deployment"]["api_url"] == "http://%s:17890" % expected_host, c0["deployment"]
+        assert c0["download_root"] == "<download-dir>" or mode != "local", c0
+    # setup 帮助/doctor 明确 local 优先且无 NAS 依赖
+    code_setup = _PAN_SETUP.read_text(encoding="utf-8")
+    assert "local / 本机 Agent / CLI" in code_setup and "无服务模式" in code_setup, "doctor 未以 local 为默认"
+    assert "macOS Keychain" in code_setup and "Windows Credential Manager" in code_setup and "secret-tool" in code_setup, "setup 缺三系统提示"
+    checks += 12
+
+    # 60) v0.13 免客户端：doctor 三态 + bookmarklet 路由 + compose 文件
+    code_setup = _PAN_SETUP.read_text(encoding="utf-8")
+    assert "运行模式" in code_setup and "local / 本机 Agent / CLI" in code_setup and "nas_docker" in code_setup, "doctor 缺运行模式输出"
+    code_web = _PAN_WEB.read_text(encoding="utf-8")
+    assert "bookmarklet_js" in code_web and "/bookmarklet.js" in code_web, "web 缺书签脚本路由"
+    compose = HERE.parent / "docker" / "docker-compose.full.yml"
+    assert compose.exists() and "cdd-alist" in compose.read_text(encoding="utf-8"), "缺 compose.full"
+    code_mcp = (HERE / "pan_mcp.py").read_text(encoding="utf-8")
+    for tok in ("pan_get", "pan_task"):
+        assert tok in code_mcp, "pan_mcp 缺 %s" % tok
+    checks += 5
+
     print("SELF_TEST_OK checks=%d tmp=%s" % (checks, TMP))
+
     return 0
 
 

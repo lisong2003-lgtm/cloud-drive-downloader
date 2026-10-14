@@ -3,7 +3,7 @@
   "download_root": "",
   "tier": "auto",
   "smart": {
-    "auto_classify": true,
+    "auto_classify": false,
     "classify_root": ""
   },
   "http": {
@@ -21,6 +21,21 @@
     "live_interval": 1.0,
     "live_dir": "",
     "schedule_at": ""
+  },
+  "ytdlp": {
+    "format": "bv*+ba/b",
+    "concurrent_fragments": 4,
+    "cookies_from_browser": "",
+    "max_filesize": 0
+  },
+  "bt": {
+    "trackers": "",
+    "seed_time": 0,
+    "enable_dht": true,
+    "dht_listen_port": "6881-6999",
+    "bt_max_peers": "64",
+    "connections_free": 4,
+    "connections_vip": 16
   },
   "remote": {
     "staging_root": "",
@@ -44,6 +59,7 @@
     "baidupcs": "",
     "quarkcli": "",
     "aria2c": "",
+    "yt-dlp": "",
     "rclone": "",
     "alist_url": "",
     "alist_user": "",
@@ -60,8 +76,7 @@
       "tier_detector": "",
       "cookie_file": "",
       "credential_ref": "",
-      "engine_command": "",
-      "save_path": "/网盘下载"
+      "engine_command": ""
     },
     "aliyun": {
       "tier": "auto",
@@ -288,6 +303,22 @@
       "engine_command": ""
     },
     "chengtong": {
+      "tier": "auto",
+      "account_tier": "",
+      "tier_detector": "",
+      "cookie_file": "",
+      "credential_ref": "",
+      "engine_command": ""
+    },
+    "stream": {
+      "tier": "auto",
+      "account_tier": "",
+      "tier_detector": "",
+      "cookie_file": "",
+      "credential_ref": "",
+      "engine_command": ""
+    },
+    "bittorrent": {
       "tier": "auto",
       "account_tier": "",
       "tier_detector": "",

@@ -1,7 +1,7 @@
 {
   "name": "cloud-drive-downloader",
-  "version": "0.7.1",
-  "description": "统一从百度、阿里云盘、夸克、天翼、迅雷、115、123云盘、移动云盘、沃盘、UC、PikPak、坚果云、OneDrive/SharePoint、Google Drive、Dropbox、微云、蓝奏及更多网盘下载分享链接、转存文件夹或直链到本机、Windows、NAS 或远程私人存储。",
+  "version": "0.14.0",
+  "description": "通用下载调度层：统一支持 Agent/MCP/CLI、Web UI 与浏览器插件，可选本机、NAS 或服务器 Docker 部署。用户自行确保下载内容合法。",
   "author": "lis",
   "license": "CC-BY-NC-SA-4.0",
   "entry": "SKILL.md",
@@ -11,34 +11,26 @@
   "scripts": [
     "scripts/pan.py",
     "scripts/self_test.py",
+    "scripts/verify_real_env.py",
+    "scripts/pan_mcp.py",
+    "scripts/clipboard_monitor.py",
+    "scripts/feishu_bot.py",
+    "scripts/pan_web.sh",
+    "scripts/pan_web.ps1",
+    "scripts/pan.cmd",
     "scripts/pan.ps1",
-    "scripts/pan.cmd"
+    "scripts/http_downloader/__init__.py",
+    "scripts/http_downloader/downloader.py",
+    "scripts/http_downloader/cli.py",
+    "scripts/hooks/post_media.sh"
   ],
   "references": [
     "references/00-使用说明.md",
-    "references/01-百度网盘.md",
-    "references/02-阿里云盘.md",
-    "references/03-夸克网盘.md",
-    "references/04-天翼云盘.md",
-    "references/05-迅雷云盘.md",
-    "references/06-扩展新网盘.md",
-    "references/07-115网盘.md",
-    "references/08-123云盘.md",
-    "references/09-移动云盘.md",
-    "references/10-联通沃盘.md",
-    "references/11-UC网盘.md",
-    "references/12-PikPak.md",
-    "references/13-坚果云.md",
-    "references/14-OneDrive与SharePoint.md",
-    "references/15-GoogleDrive.md",
-    "references/16-Dropbox.md",
-    "references/17-腾讯微云.md",
-    "references/18-蓝奏云.md",
-    "references/19-其他网盘.md",
-    "references/20-Agent调用与隐私.md",
-    "references/21-远程NAS与私有存储.md",
-    "references/22-Windows配置.md"
+    "references/33-Docker部署与一键搜索.md"
   ],
-  "privacy": "凭据只存系统凭据库或第三方工具的受保护配置；下载内容不上传到 Skill 发布渠道。",
-  "boundary": "不破解会员、限速、验证码、广告或风控；不承诺不限速。"
+  "tests": [
+    "scripts/self_test.py"
+  ],
+  "privacy": "密码、Cookie、Token 只允许保存在系统凭据库，config 只保存 credential: 引用；不上传云端，不进 Git。",
+  "boundary": "不实现网盘私有协议，不绕过验证码/风控/限速/会员鉴权；用户对下载内容的合法性负责。"
 }

@@ -1,8 +1,16 @@
-const BASE = "http://127.0.0.1:17890";
+async function BASE() { const d = await chrome.storage.local.get("serverUrl"); const u = (d.serverUrl || "").trim(); return u ? u.replace(/\/$/, "") : "http://127.0.0.1:17890"; }
 
 const $ = (id) => document.getElementById(id);
 
 async function main() {
+  const d = await chrome.storage.local.get("serverUrl");
+  $("serverUrl").value = d.serverUrl || "http://127.0.0.1:17890";
+  $("saveServer").addEventListener("click", async () => {
+    const serverUrl = $("serverUrl").value.trim().replace(/\/$/, "");
+    await chrome.storage.local.set({ serverUrl });
+    $("serverMsg").textContent = "✅ 已保存";
+    setTimeout(() => $("serverMsg").textContent = "", 1600);
+  });
   $("tstart").addEventListener("click", async () => {
     const url = ($("url").value || "").trim().split(/\s+/).find((x) => /^https?:\/\//i.test(x)) || "";
     if (!url) { setStatus("先粘贴链接再测试", "err"); return; }
@@ -10,7 +18,7 @@ async function main() {
     const tpwd = ($("tpwd").value || "").trim();
     if (tpwd) qs.append("pwd", tpwd);
     try {
-      const resp = await fetch(BASE + "/api/test?" + qs.toString());
+      const resp = await fetch(await BASE() + "/api/test?" + qs.toString());
       const data = await resp.json();
       if (!data || !data.checks) { $("tres").innerHTML = "<span class='err'>测试失败：" + ((data && data.error) || "未知") + "</span>"; return; }
       let html = "";
@@ -37,7 +45,7 @@ async function main() {
       return;
     }
     try {
-      const resp = await fetch(BASE + "/api/download", {
+      const resp = await fetch(await BASE() + "/api/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
@@ -50,7 +58,7 @@ async function main() {
         setStatus("失败：" + (data.error || "未知错误"), "err");
       }
     } catch (err) {
-      setStatus("连接本机失败，请先执行 pan serve（127.0.0.1:17890）", "err");
+      setStatus("连接失败：请检查插件里的服务地址。", "err");
     }
   });
 }

@@ -1,3 +1,112 @@
+## 2026-10-14 v0.14.0（通用下载调度层定位）
+
+- 首屏与 README 从 NAS 优先改为“通用下载调度层”，三类入口统一为 Agent/MCP/CLI、Web UI、浏览器插件。
+- 新增 macOS / Windows / Linux 用法：brew/winget/apt/dnf、默认路径和系统凭据库；Web UI 使用占位地址。
+- 浏览器插件更名“通用 pan 下载插件”，支持本机/NAS/服务器地址，明确不读取网页登录态。
+- MCP 文档补充 `pan_get` / `pan_task` / `pan_get_plan`、通用 MCP 客户端配置和无服务模式。
+- setup/doctor 以 local 为默认；NAS/server Docker 只是可选部署模式；本机模式不再检查远程依赖。
+- 新增自检：三入口/三系统/占位符、插件一致性、local/nas_docker/server_docker 配置生成；`SELF_TEST_OK checks=375`。
+
+## 2026-10-14 结构优化·之二（拆分 Web 子模块）
+
+- 抽出 `scripts/pancli/web.py`（883 行）：Web/Agent 一站式页面、PWA、实时速度、serve HTTP 服务全部外移。
+- `scripts/pancli/engine.py` 从 5985 行降到 5119 行；`pan.py serve`、`pan task` 等通过懒加载调用 web 子模块，行为不变。
+- `self_test.py` 离线自检继续通过：`SELF_TEST_OK checks=358`。
+
+## 2026-10-14 结构优化（方案 A：保留全部功能，拆分入口）
+
+- `scripts/pan.py` 改为 CLI 轻入口（约 30 行），实现迁移到 `scripts/pancli/engine.py`。
+- 修正 `engine.py` 中的 `SKILL_DIR` 与 `pan_mcp.py` 相对路径，使其在 `scripts/pancli/` 下仍指向技能根目录。
+- `self_test.py` 改为直接加载 `pancli/engine.py`，离线自检 358 项通过（SELF_TEST_OK checks=358）。
+- `config.example.json` 恢复 `http.live_status: true` 默认值，与新版实时监控自检一致。
+- 备份：先前的完整回滚备份与本次修改前备份见 `work/skill-backup-cdd-full-20261013/`。
+
+## 2026-10-13 回滚到旧版（搜索/爬虫/movie/docker）
+
+- 按用户指令回滚到 9:16 功能版：恢复 `pan search`（公开搜索一键下载）、`pan crawl`（网页爬虫）、`pan movie sources/get/x`、`pan docker`（Docker/NAS 一键安装）。
+- 恢复 `scripts/pan.py` 旧完整入口、`scripts/self_test.py`、`scripts/pan_mcp.py`、`scripts/pan_web.*`、`scripts/clipboard_monitor.py`、`scripts/feishu_bot.py`。
+- 恢复 `references/`（33 篇详细文档）与 `extensions/chrome`。
+- 恢复旧 Docker 模板：python:3.11-slim + curl + aria2 + yt-dlp + ffmpeg + ssh，暴露 17890。
+- 当前版合规重构已备份到 `work/restore-backup-refactor-20261013/`。
+
+---
+
+## v0.8.0（合规重构）
+
+- **改为纯下载调度层**：不再解析网盘分享页、不提取直链、不猜签名、不抓 Cookie/Token、不做 UA 伪装/IP 轮换、不绕过登录/VIP/限速/验证码/风控/DRM。
+- **不再搜索/索引/推荐资源**：输入只来自用户明确提供的 URL/文件 ID/分享链接；删除旧 `search`/`crawl`/`movie`/`x` 逻辑和网页爬虫。
+- 新增引擎适配器 `scripts/engines/`：curl / wget / aria2 / rclone / AList（透传用户已配置的命令）。
+- 新增命令：`get`、`engines`、`doctor`，全部支持 `--json`。
+- `credentials.py`：凭据只从 macOS Keychain / Windows Credential Manager / Linux secret-tool 读取；Cookie 经 0600 临时文件传给工具，用完即删。
+- 引擎未安装时只提示安装，不内置替代破解方案；不承诺不限速。
+- 测试：`tests/test_pan.py` 只使用公开直链与本机引擎检测。
+- 旧实现（含 references / 网盘解析逻辑）已迁出到 `work/legacy-*` 存档，不进本 Skill 目录。
+
+## Unreleased（本地迭代 R16）
+
+- 新增通用 HTTP/HTTPS 直链下载模块 `scripts/http_downloader/`：
+  - 新命令 `pan direct <直链>`：只接受 http/https 直链，支持 Range 并发分片、断点续传、重试、超时、SHA-256/MD5 校验、`--to`、`--json`。
+  - `pan get --generic-direct` 与 `pan movie get --generic-direct`：把 http/https 直链切换到通用模块，非交互必须 `--confirm-own-use`。
+  - 合规边界：不解析网盘分享链接、不绕过登录/验证码/防盗链/会员、不搜索盗版资源；下载前强制确认用户对该文件拥有授权或公开许可。
+  - 本机与 NAS 容器均已部署；容器内 `python3 -m http_downloader.self_test` 通过（单流/并发分片/拒绝非 http）。
+
+## Unreleased（本地迭代 R15）
+
+- v0.13 新增 `pan crawl` 网络爬虫能力：
+  - 新增 `pan crawl <网页URL>`：抓取网页/目录页里可直接下载的媒体、文件、magnet、torrent 候选，支持 `--kind movie|video|music|file`、`--limit`、`--timeout`、`--depth`（同域分页跟进最多 5 个子页）、`--json`。
+  - 一键下载：`pan crawl "<URL>" --pick 1 [--kind movie] [--remote nas] [--to 目录] [--dry-run]`，复用现有下载管线；网页候选默认需 `--assume-own` 确认有权访问，`--dry-run` 预览不受限。
+  - 自动识别并优先排序 torrent/video/movie 候选；支持相对链接归一化和磁力/BT 种子识别。
+  - 搜索与爬虫共用同一套“选中即下载”逻辑（`dispatch_chosen_download`），行为保持一致。
+  - 离线自测增至 358 项，覆盖单页提取、相对链接、磁力/BT、分类过滤、授权确认与 dry-run。
+
+## Unreleased（本地迭代 R14）
+
+- v0.12 解决搜索与 Docker 验证遗留风险：
+  - 新增 `pan search "关键词" --check`：离线/真机逐个测试搜索源连通性（archive.org / DuckDuckGo / yt-dlp），JSON 给 Agent 解析；沙箱外网受限时本机用它确认。
+  - 网页搜索候选增加授权确认：`--pick` 网页候选默认禁止直接下载，须加 `--assume-own` 或 `--force`（`--dry-run` 预览不受限），避免误下未授权内容。
+  - 新增 `pan docker check`：检测本机 docker/podman 与生成文件完整性；无 Docker 的主机也能静态校验并得到明确的 NAS 部署指引。
+  - 离线自测增至 340 项，覆盖搜索连通性检测、网页候选授权确认与 docker check。
+
+## Unreleased（本地迭代 R13）
+
+- v0.11 一键搜索下载 + Docker/NAS 部署：
+  - 新增 `pan search "关键词"`：聚合搜索公开/官方资源（archive.org 公版电影音频、DuckDuckGo 网页候选、yt-dlp 公开视频搜索），支持 `--kind movie|video|music|file`、`--limit`、`--json`、`--list-providers`。
+  - 一键下载：`pan search "关键词" --pick 1` 选中候选直接走现有下载管线；支持 `--remote nas`、`--to`、`--dry-run`、`--split`、`--live`。
+  - 搜索对齐合规边界：只列公开/公版/你有权下载的内容，不破解会员、验证码、限速或风控；网页搜索结果需自行确认授权。
+  - 新增 `pan docker` 子命令：在技能根 `docker/`（或自定义 `--out`）生成 `Dockerfile`、`docker-compose.yml`、`install.sh`、`README-Docker.md`；镜像内置 python+curl+aria2+yt-dlp+ffmpeg+ssh，容器里 serve 默认监听 `0.0.0.0:17890`。
+  - Docker 部署到 NAS 场景：群晖 Container Manager / 威联通、飞牛、TrueNAS 等装好 Docker 后执行 `bash install.sh`，`state/` 与 `download/` 用卷挂载持久化；容器不包含本机 config/cookie/token。
+  - 离线自测增至 322 项，覆盖 search 候选解析与 Docker 文件生成。
+
+## Unreleased（本地迭代 R12）
+
+- v0.10 免费电影 / NAS 下载 / X(推特) 视频：
+  - 新增 `pan movie sources`：列出公开/公版/官方免费电影入口（Internet Archive、Public Domain Torrents、archive.org 磁力、官方公开资源）；只列你有权下载的内容，不搬运盗版源，不破解会员/验证码/风控。
+  - 新增 `pan movie get <url> [--candidates url2,url3]`：多候选直链真实测速，自动选最快源再下载；支持 `--remote <nas>`、`--to`、`--tier`、`--dry-run`、`--split` 分片并发。
+  - 新增 `pan movie x <url>`：下载 X（原推特）推文视频，识别 `x.com/i/status`、`twitter.com/...`、`mobile.twitter.com/...`，走内置 yt-dlp 多分段下载；登录/私密推文请配置 `ytdlp.cookies_from_browser`。
+  - `detect_drive` 已将 twitter/x.com 归入 stream（yt-dlp），无需额外客户端。
+  - NAS 场景：`movie get`/`movie x` 都支持 `--remote nas`，先测速选最快，再交给远程设备下载。
+  - 离线自测新增 movie sources / X 识别 / movie get 最快候选 / movie x dry-run 用例。
+
+## Unreleased（本地迭代 R11）
+
+- v0.9 统一入口 + 最快下载体验：
+  - 新增网页视频/HLS/流媒体识别（YouTube、bilibili、vimeo、twitch 等），自动走 yt-dlp 多分段下载。
+  - 新增内置 `pan probe` 命令：对多个候选直链逐源真实测速（默认各采样前 200KB），按速度排序并推荐最快链接。
+  - 新增技能自带便携引擎：`tools/pylib` 预装 yt-dlp（已在本机装载）；`find_engine_binary` 自动在 `tools/bin、tools/pylib/bin、tools/aria2/bin` 查找，无需用户逐个装客户端。
+  - 配置新增 `ytdlp.format / concurrent_fragments / cookies_from_browser`（对流媒体多站可用性）与 `engines.yt-dlp`。
+  - 新增 `rank_fastest_urls` 测速函数与 `DRIVES.stream`。
+  - 离线自测增至 300 项。
+
+## Unreleased（本地迭代 R10）
+
+- 多协议下载扩展（HTTP/FTP/BT/磁力）：
+  - 新增 `ftp://`、`ftps://` 直链识别，自动走 curl/aria2 断点续传。
+  - 新增 `magnet:` 磁力链接与 `.torrent` 种子识别，自动路由到 aria2（DHT → P2P + tracker）。
+  - aria2 分支新增多连接并发（HTTP/FTP 用 `-x/-s`，免费默认 4、会员 16，可在 `bt.connections_free/vip` 调整）与磁力/BT 专属参数（`--enable-dht`、`--bt-save-metadata`、`--bt-max-peers`、`--seed-time`、`--bt-tracker`）。
+  - 新增配置段 `bt`（trackers / seed_time / enable_dht / dht_listen_port / bt_max_peers / connections_free / connections_vip），`config.example.json` 同步。
+  - 新增 `is_magnet_url`、`is_torrent_path`、`is_ftp_url` 识别助手。
+  - 离线自测新增 ftp/ftps/磁力/.torrent 识别与计划拼接用例。
+
 ## Unreleased（本地迭代 R8）
 
 - 发布后小白上手：

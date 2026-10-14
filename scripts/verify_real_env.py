@@ -116,7 +116,27 @@ def check_mcp():
     expected = {"pan_doctor", "pan_detect", "pan_dirs", "pan_get_plan"}
     if not expected.issubset(set(names)):
         return FAIL, "tools/list 缺工具 %s" % sorted(expected - set(names))
-    return PASS, "MCP initialize+tools ok（仍须注册到 ~/.codex/config.toml 后重启 App 实测）"
+    return PASS, "MCP initialize+tools ok（仍须注册到 <codex-home>/config.toml 后重启 App 实测）"
+
+
+def check_search():
+    """真机回归：搜索源连通性（archive/DuckDuckGo/yt-dlp）逐个探测，不实际下载。"""
+    p = sh(["search", "test", "--check", "--json"])
+    if p.returncode not in (0, 2):
+        return FAIL, p.stderr[:300]
+    try:
+        data = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        return FAIL, "search --check 输出非 JSON: " + p.stdout[:200]
+    results = data.get("results") or []
+    if not results:
+        return FAIL, "search --check 无结果"
+    names = {r.get("provider") for r in results}
+    if "ytdlp" not in names:
+        return FAIL, "缺少 ytdlp 检查项"
+    ok_sources = [r for r in results if r.get("ok")]
+    note = "源=%d ok=%d（archive/duckduckgo 需能访问外网；yt-dlp 需已安装）" % (len(results), len(ok_sources))
+    return (PASS if data.get("ok") else FAIL), note
 
 
 def main():
@@ -124,7 +144,7 @@ def main():
     ap.add_argument("--split-url", default="")
     ap.add_argument("--transfer-src", "--transfer-source", default="")
     ap.add_argument("--transfer-dst", "--transfer-dest", default="")
-    ap.add_argument("--only", choices=["doctor", "split", "rclone", "mcp"], default="")
+    ap.add_argument("--only", choices=["doctor", "split", "rclone", "mcp", "search"], default="")
     a = ap.parse_args()
 
     checks = []
@@ -136,6 +156,8 @@ def main():
         checks.append(("rclone-transfer", lambda: check_rclone(a.transfer_src, a.transfer_dst)))
     if not a.only or a.only == "mcp":
         checks.append(("mcp", check_mcp))
+    if not a.only or a.only == "search":
+        checks.append(("search-sources", check_search))
     for name, fn in checks:
         try:
             ok, note = fn()

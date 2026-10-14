@@ -22,7 +22,7 @@
 
 ```bash
 python3 scripts/pan.py remote add nas \
-  --kind ssh --host 192.168.1.10 --user lis --root /volume1
+  --kind ssh --host <NAS_IP> --user lis --root <NAS_目录>
 python3 scripts/pan.py remote check nas --probe
 python3 scripts/pan.py remote deploy nas
 python3 scripts/pan.py remote get nas "<分享链接>" --pwd <提取码>
