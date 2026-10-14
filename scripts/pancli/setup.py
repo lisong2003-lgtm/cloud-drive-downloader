@@ -8,7 +8,6 @@ import os
 import platform
 import shlex
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -206,19 +205,9 @@ def cmd_setup(args):
     ok = True
     applied = []
     if getattr(args, "apply", False) and plan["commands"]:
+        # 安全模式：不代跑包管理器；只输出已脱敏命令，由用户复核后手动执行。
         for argv in plan["commands"]:
-            print("RUN:", " ".join(shlex.quote(x) for x in mask_argv(argv)))
-            try:
-                proc = subprocess.run(argv, timeout=180)
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                ok = False
-                applied.append({"argv": mask_argv(argv), "ok": False, "error": str(exc)})
-                print("  ❌ %s" % exc)
-                continue
-            applied.append({"argv": mask_argv(argv), "ok": proc.returncode == 0})
-            if proc.returncode != 0:
-                ok = False
-                print("  ❌ exit=%s" % proc.returncode)
+            print("SAFE_RUN_SUGGESTION:", " ".join(shlex.quote(x) for x in mask_argv(argv)))
     mcp_script = Path(__file__).resolve().parent.parent / "pan_mcp.py"
     dep = cfg.get("deployment") or {}
     result = {
@@ -277,7 +266,7 @@ def cmd_setup(args):
     if not plan["missing"]:
         print("✅ 环境已就绪，下一步：login 登录 → get 下载")
     else:
-        print("提示：可用 `python3 scripts/pan.py setup --apply` 尝试自动安装；无法自动装的依赖按上面提示手动安装。")
+        print("提示：本 Skill 不自动执行系统安装；请复制上面命令，复核后手动运行。")
     return 0 if ok else 1
 
 

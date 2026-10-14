@@ -2240,7 +2240,7 @@ def build_parser():
     p_setup.add_argument("--alist-url", help="AList 服务地址")
     p_setup.add_argument("--rclone-remote", help="rclone 远端名，例如 alist:")
     p_setup.add_argument("--force", action="store_true", help="配置已存在也重新写入")
-    p_setup.add_argument("--apply", action="store_true", help="实际运行包管理器安装命令（默认只列出）")
+    p_setup.add_argument("--apply", action="store_true", help="兼容标志：仅列出安装命令，不自动执行")
     p_setup.add_argument("--json", action="store_true", help="输出 JSON")
     p_setup.set_defaults(func=_lazy_cmd("pancli.setup", "cmd_setup"))
 
