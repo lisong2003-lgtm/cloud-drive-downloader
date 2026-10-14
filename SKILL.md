@@ -2,12 +2,12 @@
 name: cloud-drive-downloader
 slug: cloud-drive-downloader
 displayName: 网盘通
-version: "0.14.0"
+version: "0.14.1"
 author: lis
 license: CC-BY-NC-SA-4.0
-description: 通用下载调度层：统一调度本机、Docker 或远程下载引擎，支持 Agent/MCP/CLI、Web UI 和浏览器插件。用户自行确保下载行为符合法律与平台规则。
+description: 通用下载调度层：Agent/MCP/CLI、Web UI 与浏览器插件三类入口；支持 macOS/Windows/Linux；local 默认，NAS/服务器 Docker 可选。仅调度用户提供的链接，不解析分享页，不绕过登录/付费/限速/DRM。用户自行确保下载合法。
 metadata:
-  version: "0.14.0"
+  version: "0.14.1"
 ---
 
 # 网盘通 · 通用下载调度层

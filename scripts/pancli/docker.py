@@ -35,7 +35,7 @@ DOCKER_FILES = {
     "docker-compose.yml": (
         "services:\n"
         "  pandownloader:\n"
-        "    image: lis/cloud-drive-downloader:0.13.0\n"
+        "    image: lis/cloud-drive-downloader:0.14.1\n"
         "    container_name: pan-downloader\n"
         "    restart: unless-stopped\n"
         "    ports:\n"

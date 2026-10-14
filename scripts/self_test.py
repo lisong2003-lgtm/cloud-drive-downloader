@@ -899,6 +899,9 @@ def main():
             return json.dumps({"response": {"docs": [{"identifier": "a1", "title": "t"}]}})
         return "ok"
     _sm.fetch_url = _fake_fetch2
+    import pancli.docker as _pan_docker
+    _orig_ready_find = _pan_docker.find_engine_binary
+    _pan_docker.find_engine_binary = lambda engine, cfg: "/tmp/mock-yt-dlp" if engine == "ytdlp" else _orig_ready_find(engine, cfg)
     try:
         rc, out = capture_call(pan.cmd_search_check, cfg={}, kind="movie", timeout=1, json_flag=True)
         assert rc == 0 and '"ok": true' in out and '"provider"' in out, out
@@ -914,6 +917,7 @@ def main():
         rc, out = capture_call(pan.cmd_search, webargs_ok)
         assert rc == 0, (rc, out)
     finally:
+        _pan_docker.find_engine_binary = _orig_ready_find
         _sm.fetch_url = _orig_fetch2
     # Docker check：mock 无 docker 时也能验证生成文件完整性与不可用提示
     _orig_which = pan.shutil.which

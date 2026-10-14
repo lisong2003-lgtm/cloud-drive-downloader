@@ -1,7 +1,7 @@
 {
   "name": "cloud-drive-downloader",
-  "version": "0.14.0",
-  "description": "通用下载调度层：统一支持 Agent/MCP/CLI、Web UI 与浏览器插件，可选本机、NAS 或服务器 Docker 部署。用户自行确保下载内容合法。",
+  "version": "0.14.1",
+  "description": "通用下载调度层：Agent/MCP/CLI、Web UI 与浏览器插件三类入口；支持 macOS/Windows/Linux；local 默认，NAS/服务器 Docker 可选。仅调度用户提供的链接，不解析分享页，不绕过登录/付费/限速/DRM。用户自行确保下载合法。",
   "author": "lis",
   "license": "CC-BY-NC-SA-4.0",
   "entry": "SKILL.md",

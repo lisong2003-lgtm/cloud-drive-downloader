@@ -1,6 +1,6 @@
 services:
   pandownloader:
-    image: lis/cloud-drive-downloader:0.13.0
+    image: lis/cloud-drive-downloader:0.14.1
     container_name: pan-downloader
     restart: unless-stopped
     dns:
