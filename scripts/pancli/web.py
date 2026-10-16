@@ -1,9 +1,13 @@
 """网盘通 Web/Agent 一站式服务子模块（从 engine.py 拆分，命令入口由 engine 懒加载）。"""
 # 自动继承 engine 的全部共享工具（SKILL_DIR、配置、日志、下载调度等）
 from pancli.engine import *  # noqa: F401,F403
-from pancli.engine import _probe_link_checks  # noqa: F401
-from pancli.report import _atomic_write_json, LIVE_FILE_NAME, TASK_FILE_NAME, read_task_records  # noqa: F401
+from pancli.engine import _probe_link_checks, fast_login_gate, login_gate_for_url, engine_catalog_payload, route_link_payload, _config_stat_key, CONFIG_PATH  # noqa: F401
+from pancli.report import _atomic_write_json, LIVE_FILE_NAME, TASK_FILE_NAME, read_task_records, web_state_root  # noqa: F401
+import html as _html
+import re as _re
 import struct as _struct  # noqa: F401
+import urllib.request as _urlrequest
+import webbrowser
 import zlib as _zlib  # noqa: F401
 
 
@@ -51,6 +55,110 @@ def _task_id(target):
     return hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:12]
 
 
+def _web_ui_status_ok(port, timeout=0.35, expected_reports_dir=""):
+    """检测本地 Web UI 是否已经就绪；失败时静默返回 False。"""
+    try:
+        with _urlrequest.urlopen("http://127.0.0.1:%d/api/status" % int(port), timeout=timeout) as resp:
+            if int(getattr(resp, "status", 0) or 0) != 200:
+                return False
+            if expected_reports_dir:
+                body = json.loads(resp.read().decode("utf-8") or "{}")
+                got = str(body.get("reports_dir") or "")
+                if got and os.path.realpath(got) != os.path.realpath(str(expected_reports_dir)):
+                    return False
+            return True
+    except Exception:
+        return False
+
+
+def ensure_web_ui(cfg=None, open_browser=True):
+    """确保本地 Web UI 已启动，并可选打开 /live 页面。
+
+    该函数只负责启动/复用状态服务，不参与下载执行；端口被占用或被系统禁止时
+    返回错误字典，由调用方降级继续下载，绝不因 Web UI 失败中断下载。
+    """
+    cfg = cfg or load_config()
+    http = cfg.get("http") or {}
+    if not bool(http.get("auto_web", True)):
+        return {"ok": False, "reused": False, "started": False, "port": 0,
+                "url": "", "reports_dir": "", "browser_opened": False,
+                "error": "配置已关闭自动 Web UI（http.auto_web=false）"}
+    dep = cfg.get("deployment") or {}
+    try:
+        requested_port = int(dep.get("web_port") or http.get("web_port") or 17890)
+    except (TypeError, ValueError):
+        requested_port = 17890
+    requested_port = max(1, min(65535, requested_port))
+    reports_dir = str(web_state_root(cfg))
+    candidates = []
+    for port in range(requested_port, min(65536, requested_port + 6)):
+        if port not in candidates:
+            candidates.append(port)
+
+    def _ready_result(port, reused=False, browser_opened=False):
+        url = "http://127.0.0.1:%d" % port
+        return {"ok": True, "reused": bool(reused), "started": not bool(reused),
+                "port": port, "url": url, "reports_dir": reports_dir,
+                "browser_opened": bool(browser_opened), "error": ""}
+
+    last_error = ""
+    for port in candidates:
+        if _web_ui_status_ok(port, expected_reports_dir=reports_dir):
+            opened = False
+            if open_browser:
+                try:
+                    opened = bool(webbrowser.open("http://127.0.0.1:%d/live" % port, new=1))
+                except Exception as exc:
+                    last_error = "Web UI 已运行，但浏览器打开失败：%s" % exc
+                if not opened:
+                    print("⚠️ 浏览器自动打开失败（沙箱/LaunchServices 限制），请手动访问：%s" % ("http://127.0.0.1:%d/live" % port), file=sys.stderr)
+            return _ready_result(port, reused=True, browser_opened=opened)
+
+        argv = [sys.executable, str(SKILL_DIR / "scripts" / "pan.py"), "serve",
+                "--host", "127.0.0.1", "--port", str(port), "--reports-dir", reports_dir]
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    start_new_session=True)
+        except OSError as exc:
+            last_error = "端口 %d 启动失败：%s" % (port, exc)
+            continue
+        ready = False
+        for _ in range(12):
+            if _web_ui_status_ok(port, expected_reports_dir=reports_dir):
+                ready = True
+                break
+            if proc.poll() is not None:
+                last_error = "端口 %d 启动失败（进程退出码 %s）" % (port, proc.returncode)
+                break
+            time.sleep(0.1)
+        if ready:
+            opened = False
+            if open_browser:
+                try:
+                    opened = bool(webbrowser.open("http://127.0.0.1:%d/live" % port, new=1))
+                except Exception as exc:
+                    last_error = "Web UI 已启动，但浏览器打开失败：%s" % exc
+                if not opened:
+                    print("⚠️ 浏览器自动打开失败（沙箱/LaunchServices 限制），请手动访问：%s" % ("http://127.0.0.1:%d/live" % port), file=sys.stderr)
+            return _ready_result(port, reused=False, browser_opened=opened)
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+        if not last_error:
+            last_error = "端口 %d 启动超时" % port
+    return {"ok": False, "reused": False, "started": False, "port": 0,
+            "url": "", "reports_dir": reports_dir, "browser_opened": False,
+            "error": last_error or "未找到可用端口"}
+
+
+def _redact_task_url(url):
+    """任务 API 不返回提取码等 URL 敏感参数。"""
+    text = str(url or "")
+    return _re.sub(r"(?i)([?&](?:pwd|password|passcode|token|access_token|secret)=)[^&#]*", r"\1***", text)
+
+
 def serve_unified_tasks(reports_dir, limit=100, state=None):
     """统一任务中心：实时任务 + 历史报告 + 任务控制记录汇总成一张任务表。"""
     control = serve_task_controls(reports_dir, limit=limit * 2)
@@ -72,12 +180,24 @@ def serve_unified_tasks(reports_dir, limit=100, state=None):
             "drive_name": item.get("drive_name", ""),
             "engine": item.get("engine", ""),
             "tier": item.get("tier", ""),
-            "url": item.get("url", ""),
+            "url": _redact_task_url(item.get("url", "")),
             "target": item.get("target", ""),
             "current_step": item.get("current_step", ""),
             "speed_kbps": item.get("speed_kbps"),
             "avg_speed_kbps": item.get("avg_speed_kbps"),
             "bytes_done": item.get("bytes_done", 0),
+            "total_bytes": item.get("total_bytes", 0),
+            "percent": item.get("percent"),
+            "eta_seconds": item.get("eta_seconds"),
+            "files_total": item.get("files_total", 0),
+            "files_done": item.get("files_done", 0),
+            "files_failed": item.get("files_failed", 0),
+            "current_file": item.get("current_file", ""),
+            "local_path": item.get("local_path", "") or item.get("target", ""),
+            "file_bytes": item.get("file_bytes", 0),
+            "file_size": item.get("file_size", 0),
+            "file_percent": item.get("file_percent"),
+            "status_text": item.get("status_text", ""),
             "started": item.get("started", ""),
             "updated": item.get("updated", "") or item.get("mtime", ""),
             "finished": item.get("updated", "") if st in ("done", "failed", "cancelled") else "",
@@ -107,6 +227,18 @@ def serve_unified_tasks(reports_dir, limit=100, state=None):
             "speed_kbps": None,
             "avg_speed_kbps": None,
             "bytes_done": 0,
+            "total_bytes": 0,
+            "percent": 100 if r.get("ok") else 0,
+            "eta_seconds": None,
+            "files_total": 0,
+            "files_done": 0,
+            "files_failed": 0 if r.get("ok") else 1,
+            "current_file": "",
+            "local_path": r.get("target", ""),
+            "file_bytes": 0,
+            "file_size": 0,
+            "file_percent": None,
+            "status_text": "已完成" if r.get("ok") else "失败",
             "started": "",
             "updated": r.get("finished", ""),
             "finished": r.get("finished", ""),
@@ -129,12 +261,24 @@ def serve_unified_tasks(reports_dir, limit=100, state=None):
             "drive_name": rec.get("drive_name", ""),
             "engine": rec.get("engine", ""),
             "tier": rec.get("tier", ""),
-            "url": rec.get("url", ""),
+            "url": _redact_task_url(rec.get("url", "")),
             "target": rec.get("target", ""),
             "current_step": rec.get("current_step", ""),
             "speed_kbps": None,
             "avg_speed_kbps": None,
             "bytes_done": 0,
+            "total_bytes": 0,
+            "percent": 100 if st == "done" else 0,
+            "eta_seconds": None,
+            "files_total": 0,
+            "files_done": 0,
+            "files_failed": 1 if st == "failed" else 0,
+            "current_file": rec.get("current_step", ""),
+            "local_path": rec.get("target", ""),
+            "file_bytes": 0,
+            "file_size": 0,
+            "file_percent": None,
+            "status_text": rec.get("current_step", ""),
             "started": rec.get("started", ""),
             "updated": rec.get("updated", ""),
             "finished": rec.get("finished", ""),
@@ -155,9 +299,11 @@ def _spawn_retry_task(rec):
     if not url:
         return "", "任务记录缺少 url，无法重试"
     args = rec.get("args") or {}
-    argv = [sys.executable, str(Path(__file__).resolve()), "get", url,
+    argv = [sys.executable, str(SKILL_DIR / "scripts" / "pan.py"), "get", url, "--live",
             "--to", str(args.get("to") or ""), "--engine", str(args.get("engine") or ""),
             "--tier", str(args.get("tier") or "")]
+    if args.get("pwd"):
+        argv += ["--pwd", str(args["pwd"])]
     if args.get("path"):
         argv += ["--path", str(args["path"])]
     try:
@@ -247,7 +393,7 @@ def _spawn_download_task(url, pwd="", to="", engine="", tier="", path=""):
     """后台启动 pan get --live；返回 (pid, 错误)。供浏览器扩展 POST /api/download 调用。"""
     if not url or not url.strip():
         return "", "url 为空"
-    argv = [sys.executable, str(Path(__file__).resolve()), "get", url.strip(), "--live"]
+    argv = [sys.executable, str(SKILL_DIR / "scripts" / "pan.py"), "get", url.strip(), "--live", "--no-web"]
     if pwd:
         argv += ["--pwd", pwd]
     if to:
@@ -264,6 +410,75 @@ def _spawn_download_task(url, pwd="", to="", engine="", tier="", path=""):
     except OSError as exc:
         return "", "启动下载失败：%s" % exc
     return str(proc.pid), ""
+
+
+def render_live_table(live):
+    """把实时任务渲染成 /live 表格；供 HTTP 路由和离线自测共用。"""
+    if not live:
+        return '<div class="empty">暂无进行中的实时下载<br><span>普通终端执行 pan get 会自动打开本页；后台任务请加 --live</span></div>', "[]"
+    shown = []
+    rows = []
+    for item in live[:8]:
+        st = item.get("state", "")
+        badge = st if st else "unknown"
+        sp = item.get("speed_kbps")
+        av = item.get("avg_speed_kbps")
+        sps = ("%.1f" % float(sp)) if sp not in (None, "") else "-"
+        avs = ("%.1f" % float(av)) if av not in (None, "") else "-"
+        by = int(item.get("bytes_done") or 0)
+        if by >= 1024 * 1024:
+            btxt = "%.2f MB" % (by / 1048576.0)
+        else:
+            btxt = "%.2f KB" % (by / 1024.0)
+        local_path = item.get("local_path") or item.get("target") or "-"
+        current_file = item.get("current_file") or ""
+        if current_file and local_path != "-" and current_file not in str(local_path):
+            local_path = str(local_path).rstrip("/\\") + "/" + current_file
+        local_path_text = _html.escape(str(local_path))
+        local_path_attr = _html.escape(str(local_path), quote=True)
+        eta = item.get("eta_seconds")
+        ets = "-"
+        if eta is not None:
+            eta = float(eta)
+            if eta <= 0:
+                ets = "即将完成"
+            elif eta < 60:
+                ets = "约 %d 秒" % int(eta)
+            elif eta < 3600:
+                ets = "约 %d 分 %d 秒" % (int(eta // 60), int(eta % 60))
+            else:
+                ets = "约 %d 小时 %d 分" % (int(eta // 3600), int((eta % 3600) // 60))
+        percent = item.get("percent")
+        pct = ("%.1f%%" % float(percent)) if percent not in (None, "") else "-"
+        detail = str(item.get("status_text") or "")
+        active_shards = int(item.get("active_shards") or 0)
+        batch_percent = item.get("batch_percent")
+        if active_shards and batch_percent is not None:
+            detail = ("%s · 当前批次 %.1f%%（%d 分片）" % (detail, float(batch_percent), active_shards)).strip(" ·")
+        shown.append({
+            "name": item.get("drive_name", ""), "step": item.get("current_step", ""),
+            "speed": sps, "avg": avs, "done": btxt, "state": badge,
+            "eta": ets, "path": str(local_path), "history": item.get("history", [])[:300],
+            "total": item.get("total_bytes", 0), "percent": item.get("percent"),
+            "detail": detail, "active_shards": active_shards,
+        })
+        detail_html = ("<div class=tip>%s</div>" % _html.escape(detail)) if detail else ""
+        rows.append(
+            "<tr><td>%s</td><td>%s</td><td><span class=speed>%s KB/s</span></td>"
+            "<td>%s KB/s</td><td>%s</td><td>%s</td><td>%s</td>"
+            "<td><span class='badge %s'>%s</span>%s</td>"
+            "<td class=mono>%s<button class=copy type=button data-path=\"%s\">复制路径</button></td>"
+            "<td class=mono>%s</td></tr>" % (
+                item.get("drive_name", ""), item.get("current_step", ""),
+                sps, avs, btxt, pct, ets, badge, badge, detail_html, local_path_text,
+                local_path_attr, item.get("updated", "")))
+    items_json = json.dumps(shown, ensure_ascii=False)
+    table = ("<thead><tr><th>网盘</th><th>当前文件 / 步骤</th><th>实时速度</th>"
+             "<th>平均速度</th><th>已下载</th><th>总进度</th><th>剩余时间</th><th>状态</th>"
+             "<th>下载位置</th><th>更新时间</th></tr></thead>"
+             "<tbody>%s</tbody>" % "".join(rows))
+    body = table + '<div id="charts"></div>'
+    return body, items_json
 
 
 def serve_live_page_html(content, items_json="[]"):
@@ -301,12 +516,31 @@ tr:last-child td{border-bottom:none}
 .card h4{margin:0 0 8px;font-size:14px}
 .card canvas{width:100%%;height:140px;display:block}
 .card .meta{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.6}
+.copy{background:#13233b;border:1px solid #334f78;color:#bfdbfe;border-radius:7px;padding:3px 8px;font-size:11px;cursor:pointer;margin-left:6px}.copy:hover{background:#1d3557}
+.hint{color:var(--muted);font-size:12px;margin:0 0 10px}
 </style></head><body><div class=wrap>
 <header><h1>⚡ 多网盘实时速度</h1><div class=nav>
-<a href=/guide>使用教程</a><a href=/>任务中心</a><a href=/api/live>API 实时</a><a href=/api/status>API 状态</a>
+<a href=/guide>使用教程</a><a href=/login>登录</a><a href=/>任务中心</a><a href=/api/live>API 实时</a><a href=/api/status>API 状态</a>
 </div></header>
+<p class=hint>下载位置显示在任务行右侧，点击“复制路径”即可复制到剪贴板。</p>
 <div class=panel><table>%(content)s</table><div id="CURVE_DATA" style="display:none">%(items_json)s</div></div>
 <script>
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done();
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('.copy');
+  if (!b) return;
+  const text = b.dataset.path || '';
+  const done = () => { b.textContent = '已复制'; setTimeout(() => { b.textContent = '复制路径'; }, 1200); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+});
 (() => {
   const wrap = document.getElementById('charts');
   if (!wrap) return;
@@ -346,6 +580,7 @@ tr:last-child td{border-bottom:none}
     ctx.fillText('峰值 ' + (m.toFixed ? m.toFixed(1) : m) + ' KB/s', 8, cv.height - 8);
   });
 })();
+setInterval(() => { if (!document.hidden) location.reload(); }, 10000);
 </script>
 </div></body></html>""" % {"content": content, "items_json": items_json})
 
@@ -502,8 +737,23 @@ def _human_error(text):
     return raw or "未知错误。"
 
 
-def diagnostics_payload():
-    """Web 快速诊断：只读检测，不做绕过。"""
+_DIAG_CACHE = {"key": None, "payload": {}, "expires": 0.0}
+_DIAG_CACHE_TTL = 30.0
+
+
+def diagnostics_payload(force=False):
+    """Web 快速诊断：只读检测，不做绕过；结果缓存 30 秒，refresh=1 可强制刷新。"""
+    now = time.time()
+    try:
+        st = CONFIG_PATH.stat()
+        key = (str(CONFIG_PATH), st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        key = (str(CONFIG_PATH), -1, -1, -1)
+    if not force and _DIAG_CACHE["key"] == key and now < _DIAG_CACHE["expires"]:
+        out = copy.deepcopy(_DIAG_CACHE["payload"])
+        out["cache_hit"] = True
+        out["cache_ttl_seconds"] = _DIAG_CACHE_TTL
+        return out
     import shutil as _sh
     import socket as _socket
     cfg = load_config()
@@ -529,7 +779,11 @@ def diagnostics_payload():
         checks.append({"name": "外网 DNS", "ok": True, "detail": "域名解析正常"})
     except Exception as exc:
         checks.append({"name": "外网 DNS", "ok": False, "detail": _human_error(exc)})
-    return {"ok": all(c["ok"] for c in checks), "checks": checks}
+    out = {"ok": all(c["ok"] for c in checks), "checks": checks,
+           "cache_hit": False, "cache_ttl_seconds": _DIAG_CACHE_TTL,
+           "checked_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S%z")}
+    _DIAG_CACHE.update(key=key, payload=copy.deepcopy(out), expires=now + _DIAG_CACHE_TTL)
+    return out
 
 
 def runtime_payload():
@@ -580,51 +834,136 @@ def serve_settings_html():
 <script>fetch('/api/settings').then(r=>r.json()).then(d=>{const c=d.config||{};const e=c.engines||{};alist.value=e.alist_url||'';remote.value=e.rclone_remote||'';root.value=c.download_root||'';conn.value=(c.http||{}).max_connections_vip||4;hook.value=(c.http||{}).on_complete_hook||''});save.onclick=async()=>{save.disabled=1;msg.textContent='保存中…';try{const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alist_url:alist.value,rclone_remote:remote.value,download_root:root.value,max_connections:Number(conn.value)||4,on_complete_hook:hook.value})});const j=await r.json();msg.textContent=j.ok?'✅ 已保存':'❌ '+(j.error||'失败')}catch(e){msg.textContent='❌ '+e}save.disabled=0};</script></div></body></html>"""
 
 
+def serve_engines_html(url=""):
+    """零客户端引擎桥说明页：不承诺绕过官方限制。"""
+    cat = engine_catalog_payload(url)
+    cards = "".join("""<article class=panel><div class=tag>%s</div><h2>%s</h2>
+<p><b>默认兼容回退：</b>%s</p><p><b>零客户端桥：</b>%s</p></article>""" % (
+        d["name"], d["drive"], d["default_engine"] or "-",
+        " / ".join(x["label"] for x in d["zero_client"])
+    ) for d in cat.get("drives", []))
+    return """<!doctype html><html lang=zh-CN><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>网盘通 · 零客户端引擎桥</title>
+<style>body{margin:0;background:#07111f;color:#e5edf8;font-family:-apple-system,PingFang SC,system-ui,sans-serif}.w{max-width:1180px;margin:auto;padding:20px}nav a{color:#38bdf8;text-decoration:none;margin-right:12px;font-size:13px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}.panel{background:#0f172a;border:1px solid #22314a;border-radius:16px;padding:16px}.tag{color:#38bdf8;font-size:12px}h2{margin:0 0 10px;font-size:18px}p,li{font-size:13px;line-height:1.6;color:#94a3b8}b{color:#e5edf8}</style></head><body><div class=w>
+<header><h1>🧩 零客户端引擎桥</h1><nav><a href="/">任务中心</a><a href="/login">登录</a><a href="/live">进度</a><a href="/test">测试</a></nav></header>
+<div class=panel style=margin-top:16px><h2>零客户端的含义</h2><p>不安装百度网盘、夸克、迅雷等桌面客户端；优先用官方网页生成直链，再交给浏览器插件捕获，或用 AList/OAuth/WebDAV 统一桥接。<b>不破解登录、签名、风控、限速或 DRM。</b>官方不给直链时，无法保证所有网盘都零客户端。</p></div>
+<div class=grid style=margin-top:16px>__CARDS__</div>
+<p style=margin-top:16px><a href=/api/engines>查看 JSON 引擎目录</a></p>
+</div></body></html>""".replace("__CARDS__", cards)
+
+
+def serve_login_html(drive=""):
+    """统一登录/授权引导页：所有网盘共用“官方登录优先 + 状态页统一展示”。"""
+    drive = str(drive or "").strip()
+    notice = ""
+    if drive:
+        gate = login_gate_for_drive_key(drive)
+        if gate.get("required"):
+            notice = ('<div class="panel" style="border-color:#f59e0b;margin-top:16px"><b>当前：%s</b>'
+                      '<p>%s — %s</p><p style="margin:8px 0 0"><a href="/test">登录后回测试页复核</a> · <a href="/">回任务中心</a></p></div>') % (
+                      gate.get("drive_name", drive), gate.get("mode", ""), gate.get("message", ""))
+    return """<!doctype html><html lang=zh-CN><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>网盘通 · 登录与授权</title>
+<style>:root{--bg:#07111f;--panel:#0f172a;--line:#22314a;--text:#e5edf8;--muted:#94a3b8;--acc:#38bdf8}*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,PingFang SC,system-ui,sans-serif}.w{max-width:1180px;margin:auto;padding:20px}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}nav a{color:var(--acc);text-decoration:none;margin-right:12px;font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px}
+h2{margin:0 0 10px;font-size:18px}p,li{font-size:13px;line-height:1.6;color:var(--muted)}b{color:var(--text)}
+ul{padding-left:18px;margin:8px 0 0}.tag{font-size:12px;color:var(--acc);margin-bottom:4px}
+</style></head><body><div class=w>
+<header><h1>🔐 登录与授权</h1><nav><a href="/">任务中心</a><a href="/live">实时进度</a><a href="/test">测试连接</a><a href="/settings">设置</a><a href="/guide">教程</a></nav></header>
+__LOGIN_NOTICE__
+<div class="panel" style="margin-top:16px"><h2>铁律</h2>
+<ul><li><b>官方登录优先</b>：扫码、OAuth、浏览器授权 > 手工 Cookie > 账号密码。</li>
+<li><b>不在聊天里粘贴密码、Cookie、BDUSS、STOKEN、Token。</b></li>
+<li><b>需要 Cookie 时</b>：只在本机浏览器/终端复制进系统凭据库或工具自己的配置，不发给 Agent。</li>
+<li><b>不绕过</b>验证码、风控、限速、会员限制、DRM。</li>
+<li><b>下载状态必须显示在 Web UI</b> 的任务中心和 /live，不再用聊天轮询刷屏。</li></ul></div>
+<div class=grid style="margin-top:16px">
+<article class=panel><div class=tag>百度网盘</div><h2>优先扫码登录</h2><p>用百度 App 扫码完成 BaiduPCS-Go 登录；避免复制 BDUSS/STOKEN。分享文件先转存到自己网盘，再走统一任务中心。</p><ul><li>支持：扫码、浏览器登录</li><li>禁止：聊天粘贴 Cookie、密码</li><li>状态：任务中心 / /live</li></ul></article>
+<article class=panel><div class=tag>阿里云盘</div><h2>OAuth 优先</h2><p>优先官方开放平台 OAuth；个人快速使用可挂 AList 后扫码授权。不要把 refresh_token 发进聊天。</p><ul><li>支持：OAuth、扫码</li><li>凭据：AList/系统凭据库</li></ul></article>
+<article class=panel><div class=tag>夸克 / 115 / 123 / 移动 / 天翼 / 迅雷</div><h2>AList 驱动优先</h2><p>优先在 AList 中按驱动提示完成扫码、OAuth 或 Cookie 授权。Cookie 只写进 AList/系统凭据库。</p><ul><li>支持：扫码、OAuth、Cookie</li><li>凭据：AList/系统凭据库</li></ul></article>
+<article class=panel><div class=tag>OneDrive / Google Drive / Dropbox / SharePoint</div><h2>OAuth</h2><p>统一走官方 OAuth；不要账号密码交给 Agent。rclone/AList/官方 CLI 都应在系统凭据库或自身配置里保管 Token。</p><ul><li>支持：OAuth</li><li>凭据：rclone/AList/官方 CLI</li></ul></article>
+<article class=panel><div class=tag>坚果云 / WebDAV</div><h2>应用密码</h2><p>使用坚果云的应用密码而不是账号密码，保存在系统凭据库或 rclone 配置中。</p><ul><li>支持：WebDAV 应用密码</li><li>凭据：系统凭据库/rclone</li></ul></article>
+<article class=panel><div class=tag>其他网盘</div><h2>官方通道优先</h2><p>优先官方客户端/CLI 或公开直链；仅当工具明确要求 Cookie/Token 时，才在本机完成凭据写入。禁止把敏感值发到聊天。</p><ul><li>支持：官方客户端、CLI、直链</li><li>凭据：系统凭据库</li></ul></article>
+</div>
+<p style="margin-top:16px;color:var(--muted);font-size:12px">遇到平台限制时，只报告真实原因；不破解、不伪造登录态、不绕过限速或风控。</p>
+</div></body></html>""".replace("__LOGIN_NOTICE__", notice)
+
 def serve_logs_html():
     rows = "".join("<div class=log>%s</div>" % x.replace("&", "&amp;").replace("<", "&lt;") for x in recent_log_lines(50))
     return """<!doctype html><html lang=zh-CN><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>网盘通 · 日志</title><style>body{background:#0b1120;color:#e5edf8;font-family:ui-monospace,Menlo,monospace;margin:0;padding:20px}a{color:#38bdf8;text-decoration:none}.box{background:#020617;border:1px solid #243244;border-radius:10px;padding:12px;white-space:pre-wrap;overflow:auto;max-height:80vh}.log{padding:3px 0;border-bottom:1px solid #16212f;font-size:12px}</style></head><body><h1>最近日志</h1><p><a href="/">← 返回控制台</a></p><div class=box>%s</div></body></html>""" % (rows or "<div class=log>暂无日志</div>")
 
 
 def serve_home_html(tasks):
-    """一体化下载控制台。"""
-    def fmt_speed(v):
-        return "%.1f KB/s" % float(v) if v not in (None, "") else "-"
-    def fmt_size(n):
-        n = float(n or 0)
-        return ("%.1f MB" % (n / 1048576)) if n >= 1048576 else ("%.1f KB" % (n / 1024)) if n else "-"
-    def fmt_eta(v):
-        try:
-            v = float(v)
-            return "即将完成" if v <= 0 else ("%d分%02d秒" % (v // 60, v % 60)) if v < 3600 else ("%d时%02d分" % (v // 3600, (v % 3600) // 60))
-        except Exception:
-            return "-"
-    cards = "".join("""<article class="task %s"><div class=top><span class=state>%s</span><span>%s</span></div>
-<div class=name>%s</div><div class=meta>%s · %s · %s</div>
-<div class=bar><i style="width:%s%%"></i></div>
-<div class=stats><span>%s</span><span>%s</span><span>%s</span></div>
-<div class=ops>%s</div></article>""" % (
-        t.get("state") or "unknown", t.get("state") or "unknown", t.get("id"), t.get("current_step") or t.get("target") or t.get("url") or "未命名任务",
-        t.get("drive_name") or t.get("drive") or "直链", t.get("engine") or "-", t.get("updated") or "-",
-        max(0, min(100, int(t.get("percent") or 0))), fmt_speed(t.get("speed_kbps")), fmt_size(t.get("bytes_done")), fmt_eta(t.get("eta_seconds")),
-        ('<a href="/api/task/action?task=%s&action=pause">暂停</a><a href="/api/task/action?task=%s&action=delete">删除</a>' % (t["id"], t["id"])) if t.get("state") == "running"
-        else ('<a href="/api/task/action?task=%s&action=resume">继续</a><a href="/api/task/action?task=%s&action=delete">删除</a>' % (t["id"], t["id"])) if t.get("state") == "paused"
-        else ('<a href="/api/task/action?task=%s&action=retry">重试</a><a href="/api/task/action?task=%s&action=delete">删除</a>' % (t["id"], t["id"])))
-        for t in tasks[:60]) or '<div class=empty>暂无任务。粘贴链接后点击开始下载。</div>'
-    dir_options = '<option value="">默认目录</option>' + "".join('<option value="%s">%s</option>' % (v, k) for k, v in runtime_payload().get("download_dirs", {}).items())
-    return """<!doctype html><html lang=zh-CN><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>网盘通控制台</title>
-<link rel="manifest" href="/manifest.webmanifest"><script>if('serviceWorker'in navigator){navigator.serviceWorker.register('/sw.js')}</script>
-<style>:root{--bg:#07111f;--panel:#0f172a;--line:#22314a;--text:#e5edf8;--muted:#94a3b8;--acc:#38bdf8}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,PingFang SC,system-ui,sans-serif}.w{max-width:1180px;margin:auto;padding:20px}header{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}nav a{color:var(--acc);text-decoration:none;margin-right:12px;font-size:13px}.grid{display:grid;grid-template-columns:1.3fr .7fr;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px}label{font-size:12px;color:var(--muted);display:block;margin-bottom:4px}textarea,input,select{width:100%;background:#020617;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px;margin-bottom:8px}button{border:0;border-radius:9px;background:var(--acc);color:#06283d;font-weight:700;padding:10px;width:100%}.tasks{display:grid;gap:10px}.task{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px}.top,.stats,.ops{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted)}.state{text-transform:uppercase}.name{font-size:14px;margin:5px 0;word-break:break-all}.bar{height:8px;background:#1e293b;border-radius:99px;overflow:hidden}.bar i{display:block;height:100%;background:var(--acc)}.ops a{color:var(--acc);text-decoration:none}.diag div{display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--line)}.ok{color:#4ade80}.bad{color:#f87171}.empty{color:var(--muted);font-size:13px}.theme{position:fixed;right:14px;bottom:14px;border-radius:99px;width:38px;height:38px;padding:0}@media(max-width:820px){.grid{grid-template-columns:1fr}}</style></head><body><div class=w>
-<header><h1>⏬ 网盘通控制台 <small id=runtimeInfo class=empty>读取中…</small></h1><nav><a href=/guide>教程</a><a href=/live>速度</a><a href=/test>测试</a><a href=/settings>设置</a><a href=/logs>日志</a><a href=/api/diagnostics>诊断API</a></nav></header>
-<div class=grid><section class=panel><h2>批量下载</h2><textarea id=url rows=4 placeholder="每行一个 HTTP/HTTPS/AList/官方工具支持的链接"></textarea><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label>提取码</label><input id=pwd></div><div><label>下载目录</label><select id=to><option value="">默认目录</option>__DIR_OPTIONS__</select></div><div><label>引擎</label><select id=engine><option value="">自动</option><option value=curl>curl</option><option value=aria2>aria2</option><option value=alist>AList/rclone</option><option value=ytdlp>yt-dlp</option></select></div><div><label>优先级</label><select id=tier><option value="">自动</option><option value=free>普通</option><option value=vip>高优先</option></select></div></div><button id=start>开始下载</button><div id=msg class=empty style="margin-top:8px">支持多行，每行一个链接。</div></section>
-<section class=panel><h2>快速诊断</h2><div id=diag class=diag><div class=empty>检测中…</div></div><button id=refresh style="margin-top:10px">重新诊断</button></section></div>
-<section class=panel style="margin-top:14px"><h2>任务中心</h2><div class=tasks>__CARDS__</div></section>
-<button class=theme onclick="document.documentElement.style.filter=document.documentElement.style.filter?'':'invert(1) hue-rotate(180deg)'">🌗</button>
+    """极简自动下载控制台：投递即开始，前端 10 秒无刷新轮询；提交后立即回执受理与耗时。"""
+    return r"""<!doctype html><html lang=zh-CN><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>网盘通 · 零客户端下载</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<script>if('serviceWorker'in navigator){navigator.serviceWorker.register('/sw.js')}</script>
+<style>
+:root{--bg:#07111f;--panel:#0f172a;--line:#22314a;--text:#e5edf8;--muted:#94a3b8;--acc:#38bdf8;--ok:#4ade80;--bad:#f87171}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+.w{max-width:1180px;margin:auto;padding:20px}header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+h1{font-size:21px;margin:0}small{color:var(--muted);font-weight:400}nav a{color:var(--acc);text-decoration:none;margin-left:12px;font-size:13px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.drop{font-size:17px;padding:15px;border:1px dashed #3b82f6;border-radius:12px}.drop:focus{outline:2px solid var(--acc);outline-offset:1px}
+.msg{min-height:22px;color:var(--muted);font-size:13px;margin:8px 2px 0}.msg.ok{color:var(--ok)}.msg.bad{color:var(--bad)}
+.adv{margin-top:10px;color:var(--muted);font-size:12px}.adv summary{cursor:pointer}.adv-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px}
+label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}input,select{width:100%;background:#020617;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px}
+.tasks{display:grid;gap:10px}.task{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px}
+.top,.stats,.ops{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.name{font-size:15px;margin:6px 0;word-break:break-all}.bar{height:9px;background:#1e293b;border-radius:99px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,#38bdf8,#22c55e);width:0;transition:width .25s}
+.stats{margin-top:8px}.path{margin-top:7px;color:var(--muted);font-size:12px;word-break:break-all}.ops{margin-top:8px}.ops a{color:var(--acc);text-decoration:none}
+.pathline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.pathline code{color:#dbeafe;font-size:11px;font-family:ui-monospace,Menlo,monospace}.copy{background:#13233b;border:1px solid #334f78;color:#bfdbfe;border-radius:7px;padding:3px 8px;font-size:11px;cursor:pointer}.copy:hover{background:#1d3557}
+.state{font-weight:700}.state.running{color:#facc15}.state.done{color:var(--ok)}.state.failed,.state.cancelled{color:var(--bad)}.state.paused{color:#cbd5e1}
+.empty{color:var(--muted);font-size:14px;text-align:center;padding:28px}.foot{color:var(--muted);font-size:12px;text-align:center;margin-top:18px}
+@media(max-width:760px){.adv-grid{grid-template-columns:1fr}}
+</style></head><body><div class=w>
+<header><h1>⏬ 网盘通 <small id=runtime>零客户端下载 · 粘贴链接后自动开始</small></h1><nav><a href=/test>测试</a><a href=/live>速度</a><a href=/engines>引擎</a><a href=/settings>设置</a><a href=/logs>日志</a></nav></header>
+<section class=panel>
+<input class=drop id=url autocomplete=off placeholder="粘贴百度网盘/直链后自动开始（支持多行）">
+<div id=msg class=msg>无需点击开始；链接中的 pwd 会自动识别。</div>
+<details class=adv><summary>可选设置（默认已自动）</summary><div class=adv-grid>
+<div><label>提取码</label><input id=pwd autocomplete=off placeholder="链接内已含时可留空"></div>
+<div><label>下载目录</label><select id=to><option value="">默认目录</option></select></div>
+<div><label>引擎</label><select id=engine><option value="">自动</option><option value=baiduweb>百度官方网页会话</option><option value=browser>浏览器直链桥</option></select></div>
+</div></details>
+</section>
+<section><h2 style="font-size:16px;margin:4px 0 10px">任务中心</h2><div id=tasks class=tasks><div class=empty>暂无任务</div></div></section>
+<div class=foot>状态由本地服务实时刷新；不在聊天里轮询进度。遇验证码/风控/会员/付费限制会安全失败。</div>
 <script>
-function render(){fetch('/api/tasks').then(r=>r.json()).then(d=>location.reload()).catch(()=>{})}
-async function diag(){const d=document.getElementById('diag');d.innerHTML='<div class=empty>检测中…</div>';try{const j=await (await fetch('/api/diagnostics')).json();d.innerHTML=j.checks.map(x=>'<div><span>'+x.name+'</span><span class="'+(x.ok?'ok':'bad')+'">'+(x.ok?'✅ ':'❌ ')+x.detail+'</span></div>').join('')}catch(e){d.innerHTML='<div class=bad>诊断失败</div>'}}
-document.getElementById('start').onclick=async()=>{const urls=(url.value||'').split(/\\s+/).filter(x=>/^https?:\\/\\//i.test(x));if(!urls.length){msg.textContent='请先粘贴至少一个链接';return}msg.textContent='正在投递 '+urls.length+' 个任务…';try{const r=await fetch('/api/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls,pwd:pwd.value,to:to.value,engine:engine.value,tier:tier.value})});const j=await r.json();msg.textContent=(j.ok?'✅ ':'❌ ')+(j.message||j.error||'');if(j.ok)setTimeout(render,700)}catch(e){msg.textContent='❌ '+e}};refresh.onclick=diag;diag();fetch('/api/runtime').then(r=>r.json()).then(r=>{runtimeInfo.textContent='运行模式：'+(r.mode_name||r.mode)+' · API：'+r.api_url+' · 目录：'+r.download_root;to.innerHTML='<option value="">默认目录</option>'+Object.entries(r.download_dirs||{}).map(([k,v])=>`<option value="${v}">${k}</option>`).join('')}).catch(()=>{runtimeInfo.textContent='运行模式：未知 · 请先运行 pan setup --mode local'});
-</script></div></body></html>""".replace("__CARDS__", cards).replace("__DIR_OPTIONS__", dir_options)
-
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function size(n){n=Number(n||0);if(!n)return '-';if(n>=1073741824)return (n/1073741824).toFixed(2)+' GB';if(n>=1048576)return (n/1048576).toFixed(2)+' MB';return (n/1024).toFixed(1)+' KB'}
+function speed(n){if(n==null||n==='')return '-';n=Number(n);if(n>=1024)return (n/1024).toFixed(2)+' MB/s';return n.toFixed(1)+' KB/s'}
+function eta(n){if(n==null||n==='')return '-';n=Number(n);if(n<=0)return '即将完成';if(n<60)return Math.round(n)+' 秒';if(n<3600)return Math.floor(n/60)+' 分 '+Math.round(n%60)+' 秒';return Math.floor(n/3600)+' 时 '+Math.floor((n%3600)/60)+' 分'}
+function stateText(s){return ({running:'下载中',done:'已完成',failed:'失败',paused:'已暂停',cancelled:'已取消',unknown:'等待中'})[s]||s||'等待中'}
+function taskHtml(t){
+ const total=Number(t.files_total||0),done=Number(t.files_done||0),failed=Number(t.files_failed||0);
+ let pct=Number(t.percent);if(!Number.isFinite(pct)){const tb=Number(t.total_bytes||0),bd=Number(t.bytes_done||0);pct=tb?bd*100/tb:0}
+ pct=Math.max(0,Math.min(100,pct||0));
+ const name=t.current_file||t.name||String(t.target||t.url||'任务').split('/').pop()||'任务';
+ const count=total?(`${done}/${total} 已完成 · ${failed} 失败`):(t.state==='done'?'完成':'-');
+ const ops=t.state==='running'?`<a href="/api/task/action?task=${encodeURIComponent(t.id)}&action=pause">暂停</a><a href="/api/task/action?task=${encodeURIComponent(t.id)}&action=delete">删除</a>`:t.state==='paused'?`<a href="/api/task/action?task=${encodeURIComponent(t.id)}&action=resume">继续</a><a href="/api/task/action?task=${encodeURIComponent(t.id)}&action=delete">删除</a>`:`<a href="/api/task/action?task=${encodeURIComponent(t.id)}&action=retry">重试</a><a href="/api/task/action?task=${encodeURIComponent(t.id)}&action=delete">删除</a>`;
+ let loc=t.local_path||t.target||'-';const cf=t.current_file||'';if(cf&&loc&&!String(loc).includes(cf))loc=String(loc).replace(/[\\/]+$/,'')+'/'+cf;
+ return `<article class=task><div class=top><span class="state ${esc(t.state||'')}">${esc(stateText(t.state))}</span><span>${esc(t.drive_name||t.drive||'直链')} · ${esc(t.engine||'-')}</span></div><div class=name>${esc(name)}</div><div class=bar><i style="width:${pct}%"></i></div><div class=stats><span>总进度 ${pct.toFixed(1)}% · ${size(t.bytes_done)} / ${size(t.total_bytes)}</span><span>${esc(count)}</span><span>${speed(t.speed_kbps)} · 剩余 ${eta(t.eta_seconds)}</span></div><div class=path>状态：${esc(t.status_text||stateText(t.state))}<div class=pathline><span>下载位置：</span><code>${esc(loc)}</code><button class=copy type=button data-path="${esc(loc)}">复制路径</button></div></div><div class=ops>${ops}</div></article>`;
+}
+async function copyPath(text,btn){try{await navigator.clipboard.writeText(text)}catch(e){const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove()}btn.textContent='已复制';setTimeout(()=>btn.textContent='复制路径',1200)}
+document.getElementById('tasks').addEventListener('click',e=>{const b=e.target.closest('.copy');if(b)copyPath(b.dataset.path||'',b)});
+async function loadTasks(){try{const j=await (await fetch('/api/tasks',{cache:'no-store'})).json();const list=j.tasks||[];document.getElementById('tasks').innerHTML=list.length?list.map(taskHtml).join(''):'<div class=empty>暂无任务</div>'}catch(e){}}
+let lastSubmit='',submitting=false;
+async function submitUrls(){
+ const raw=document.getElementById('url').value.trim();const urls=raw.split(/\s+/).filter(x=>/^https?:\/\//i.test(x));
+ if(!urls.length||submitting)return;const sig=urls.join('\n');if(sig===lastSubmit)return;submitting=true;lastSubmit=sig;
+ const msg=document.getElementById('msg');msg.className='msg';msg.textContent='已受理，正在派发…（本地服务通常 <50ms 返回）';
+ const t0=performance.now();
+ try{const body={urls,pwd:document.getElementById('pwd').value.trim(),to:document.getElementById('to').value,engine:document.getElementById('engine').value};const j=await (await fetch('/api/download',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();const ms=Math.round(j.dispatch_ms!=null?j.dispatch_ms:(performance.now()-t0));if(!j.ok){msg.className='msg bad';msg.textContent='投递失败：'+(j.error||j.message||'未知错误')}else{msg.className='msg ok';msg.textContent='已受理 '+urls.length+' 个任务（'+ms+'ms）· 实时进度见 '+(j.live_url||'/live');document.getElementById('url').value='';loadTasks()}}catch(e){msg.className='msg bad';msg.textContent='通信失败：'+e}finally{submitting=false}
+}
+const input=document.getElementById('url');let debounce=null;function schedule(){clearTimeout(debounce);debounce=setTimeout(submitUrls,120)}
+input.addEventListener('paste',()=>setTimeout(submitUrls,0));input.addEventListener('input',schedule);input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submitUrls()}});
+fetch('/api/runtime').then(r=>r.json()).then(r=>{document.getElementById('runtime').textContent='零客户端下载 · '+(r.mode_name||r.mode||'local');const to=document.getElementById('to');to.innerHTML='<option value="">默认目录</option>'+Object.entries(r.download_dirs||{}).map(([k,v])=>`<option value="${esc(v)}">${esc(k)}</option>`).join('')}).catch(()=>{});
+loadTasks();setInterval(loadTasks,10000);
+</script></div></body></html>"""
 
 def serve_test_html():
     """独立「测试连接」页：粘贴链接→调用 /api/test→人话结果（不自动刷新，避免打断输入）。"""
@@ -664,7 +1003,7 @@ button:hover{opacity:.9}
 <input id=testPwd type=text placeholder="提取码（没有可留空）" autocomplete=off>
 <button type=submit>开始测试</button>
 </form>
-<p style="color:var(--muted);font-size:12px;margin:6px 0 0">只做本地静态检查：识别网盘、依赖与配置、目标目录、提取码提示。不会下载文件、不发请求到网盘页面。</p>
+<p style="color:var(--muted);font-size:12px;margin:6px 0 0">一次本地路由：识别网盘、登录/授权、依赖与配置、目标目录、提取码和零客户端桥。不会下载文件、不发请求到网盘页面。</p>
 <div id=result></div>
 </div>
 <script>
@@ -678,7 +1017,7 @@ document.getElementById('testForm').addEventListener('submit', async function (e
   try {
     const qs = new URLSearchParams({ url: url });
     if (pwd) { qs.append('pwd', pwd); }
-    const resp = await fetch('/api/test?' + qs.toString());
+    const resp = await fetch('/api/route?' + qs.toString());
     const j = await resp.json();
     let html = '';
     const marks = [];
@@ -688,7 +1027,10 @@ document.getElementById('testForm').addEventListener('submit', async function (e
       html += '<div class="row"><span class="name ' + (c.ok ? 'ok' : 'bad') + '">' + mark + ' ' + (c.name || '') + '</span><span class="detail">' + (c.detail || '') + '</span></div>';
     });
     const allOk = marks.length > 0 && marks.every(Boolean);
-    html = '<div class="sum ' + (allOk ? 'ok' : 'bad') + '">' + (allOk ? '✅ 可以开始下载' : '❌ 当前还不能直接下载') + '</div>' + html;
+    const next = j.next_action || '';
+    let summary = allOk ? '✅ 可以开始下载' : '❌ 当前还不能直接下载';
+    if (next === 'login' && j.login_url) { summary = '⚠️ 需要登录/授权：<a href="' + j.login_url + '">打开登录页</a>'; }
+    html = '<div class="sum ' + (allOk ? 'ok' : 'bad') + '">' + summary + ' <small>' + (j.latency_ms || '-') + 'ms</small></div>' + html;
     out.innerHTML = html;
   } catch (err) {
     out.innerHTML = '<div class="row"><span class="name bad">❌ 通信失败</span><span class="detail">请确认本机服务已运行：python3 scripts/pan.py serve</span></div>';
@@ -729,9 +1071,8 @@ def cmd_serve(args):
         print("❌ 当前环境无 http.server")
         return 1
     import threading
-    reports_dir = os.path.expanduser(args.reports_dir) if args.reports_dir else ""
-    if not reports_dir:
-        reports_dir = str(Path((load_config().get("http") or {}).get("report_dir") or default_root(load_config())))
+    cfg = load_config()
+    reports_dir = os.path.expanduser(args.reports_dir) if args.reports_dir else str(web_state_root(cfg))
     host, port = args.host, int(args.port)
 
     class Handler(BaseHTTPRequestHandler):
@@ -778,18 +1119,54 @@ def cmd_serve(args):
                 if not urls:
                     self._json({"ok": False, "error": "缺少下载链接", "human": "请先粘贴至少一个 HTTP/HTTPS 链接。"})
                     return
-                results, errors = [], []
+                _t0 = time.perf_counter()
+                cfg_once = load_config()          # 整批只读一次配置，避免逐条深拷贝+重复读盘
+                _pwd = body.get("pwd") or ""
+                _to = body.get("to") or ""
+                _engine = body.get("engine") or ""
+                _tier = body.get("tier") or ""
+                _path = body.get("path") or ""
+                _confirm = bool(body.get("confirm_auth"))
+                errors, queued = [], []
+                # 登录门禁是纯本机毫秒级检查，必须同步做完：需要登录时要立刻回 /login。
                 for url in urls[:100]:
-                    pid, err = _spawn_download_task(
-                        url, pwd=(body.get("pwd") or ""), to=(body.get("to") or ""),
-                        engine=(body.get("engine") or ""), tier=(body.get("tier") or ""),
-                        path=(body.get("path") or ""))
+                    auth = fast_login_gate(url, cfg_once)
+                    if auth.get("blocking") and not _confirm:
+                        errors.append({"url": url, "error": "login_required", "human": auth.get("message", "需要先完成官方登录/授权"),
+                                       "login_url": auth.get("login_url", "/login"), "drive": auth.get("drive", "")})
+                        continue
+                    queued.append(url)
+
+                def _dispatch_batch(url_list):
+                    """分批派发下载进程；放到后台线程，HTTP 不再为 N 次 fork 买单。"""
+                    for u in url_list:
+                        _pid, _err = _spawn_download_task(u, pwd=_pwd, to=_to, engine=_engine, tier=_tier, path=_path)
+                        if _err:
+                            log_line("download dispatch failed: %s -> %s" % (_redact_task_url(u), _err))
+                results, async_dispatch = [], False
+                if len(queued) == 1:
+                    # 单个链接同步派发：立即拿到真实 PID，浏览器插件/Agent 语义不变。
+                    pid, err = _spawn_download_task(queued[0], pwd=_pwd, to=_to, engine=_engine, tier=_tier, path=_path)
                     if err:
-                        errors.append({"url": url, "error": err, "human": _human_error(err)})
+                        errors.append({"url": queued[0], "error": err, "human": _human_error(err)})
                     else:
-                        results.append({"url": url, "pid": pid})
-                self._json({"ok": not errors, "message": "已投递 %d 个任务，失败 %d 个。" % (len(results), len(errors)),
+                        results.append({"url": queued[0], "pid": pid})
+                elif queued:
+                    # 多链接批量：先回执受理，下载进程在后台线程里派发，响应时间与链接数解耦。
+                    threading.Thread(target=_dispatch_batch, args=(list(queued),), daemon=True).start()
+                    results = [{"url": u, "pid": ""} for u in queued]
+                    async_dispatch = True
+                first_auth_error = next((e for e in errors if e.get("login_url")), {})
+                dispatch_ms = round((time.perf_counter() - _t0) * 1000, 1)
+                first_pid = next((r["pid"] for r in results if r.get("pid")), "")
+                self._json({"ok": not errors, "message": "已受理 %d 个任务，失败 %d 个。" % (len(queued), len(errors)),
                             "results": results, "errors": errors,
+                            "pid": first_pid, "accepted": len(queued), "queued": len(queued) if async_dispatch else 0,
+                            "async": async_dispatch,
+                            "accepted_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                            "dispatch_ms": dispatch_ms,
+                            "live_url": "http://%s:%d/live" % (host, port),
+                            "login_required": bool(first_auth_error), "login_url": first_auth_error.get("login_url", ""),
                             "home_url": "http://%s:%d/" % (host, port)})
             elif self.path.startswith("/api/settings"):
                 cfg = load_config()
@@ -828,12 +1205,27 @@ def cmd_serve(args):
                 self._raw(pwa_icon_png(size), "image/png")
             elif self.path.startswith("/api/runtime"):
                 self._json(runtime_payload())
+            elif self.path.startswith("/api/engines"):
+                q = dict(parse_qs(self.path.split("?", 1)[1])) if "?" in self.path else {}
+                self._json(engine_catalog_payload((q.get("url") or [""])[0]))
             elif self.path.startswith("/api/diagnostics"):
-                self._json(diagnostics_payload())
+                q = dict(parse_qs(self.path.split("?", 1)[1])) if "?" in self.path else {}
+                self._json(diagnostics_payload(force=(q.get("refresh") or [""])[0] == "1"))
             elif self.path.startswith("/api/settings"):
                 self._json({"ok": True, "config": load_config()})
             elif self.path.startswith("/api/reports"):
                 self._json({"reports": serve_reports_json(reports_dir)})
+            elif self.path.startswith("/api/route"):
+                q = dict(parse_qs(self.path.split("?", 1)[1])) if "?" in self.path else {}
+                url = (q.get("url") or [""])[0]
+                if not url:
+                    self._json({"ok": False, "error": "缺少 url 参数"})
+                else:
+                    self._json(route_link_payload(load_config(), url,
+                                                  pwd=(q.get("pwd") or [""])[0],
+                                                  engine=(q.get("engine") or [""])[0],
+                                                  tier=(q.get("tier") or [""])[0],
+                                                  path=(q.get("path") or [""])[0]))
             elif self.path.startswith("/api/test"):
                 q = dict(parse_qs(self.path.split("?", 1)[1])) if "?" in self.path else {}
                 url = (q.get("url") or [""])[0]
@@ -878,53 +1270,15 @@ def cmd_serve(args):
                 self._json({"tasks": serve_unified_tasks(reports_dir, limit=100, state=st or None)})
             elif self.path in ("/live", "/live.html"):
                 live = serve_live_json(reports_dir)
-                items_json = "[]"
-                if not live:
-                    body = '<div class="empty">暂无进行中的实时下载<br><span>下载时执行 get --live 生成 下载速度.live.json</span></div>'
-                else:
-                    shown = []
-                    for item in live[:8]:
-                        st = item.get("state", "")
-                        badge = st if st else "unknown"
-                        sp = item.get("speed_kbps")
-                        av = item.get("avg_speed_kbps")
-                        sps = ("%.1f" % float(sp)) if sp not in (None, "") else "-"
-                        avs = ("%.1f" % float(av)) if av not in (None, "") else "-"
-                        by = int(item.get("bytes_done") or 0)
-                        if by >= 1024 * 1024:
-                            btxt = "%.2f MB" % (by / 1048576.0)
-                        else:
-                            btxt = "%.2f KB" % (by / 1024.0)
-                        eta = item.get("eta_seconds")
-                        ets = "-"
-                        if eta is not None:
-                            eta = float(eta)
-                            if eta <= 0:
-                                ets = "即将完成"
-                            elif eta < 60:
-                                ets = "约 %d 秒" % int(eta)
-                            elif eta < 3600:
-                                ets = "约 %d 分 %d 秒" % (int(eta // 60), int(eta % 60))
-                            else:
-                                ets = "约 %d 小时 %d 分" % (int(eta // 3600), int((eta % 3600) // 60))
-                        shown.append({
-                            "name": item.get("drive_name", ""), "step": item.get("current_step", ""),
-                            "speed": sps, "avg": avs, "done": btxt, "state": badge,
-                            "eta": ets, "history": item.get("history", [])[:300],
-                            "total": item.get("total_bytes", 0), "percent": item.get("percent"),
-                        })
-                        rows.append(
-                            "<tr><td>%s</td><td>%s</td><td><span class=speed>%s KB/s</span></td>"
-                            "<td>%s KB/s</td><td>%s</td><td>%s</td><td><span class='badge %s'>%s</span></td>"
-                            "<td class=mono>%s</td></tr>" % (
-                                item.get("drive_name", ""), item.get("current_step", ""),
-                                sps, avs, btxt, ets, badge, badge, item.get("updated", "")))
-                    items_json = json.dumps(shown, ensure_ascii=False)
-                    table = ("<thead><tr><th>网盘</th><th>当前文件 / 步骤</th><th>实时速度</th>"
-                             "<th>平均速度</th><th>已下载</th><th>剩余时间</th><th>状态</th><th>更新时间</th></tr></thead>"
-                             "<tbody>%s</tbody>" % "".join(rows))
-                    body = table + '<div id="charts"></div>'
+                body, items_json = render_live_table(live)
                 self._html(serve_live_page_html(body, items_json=items_json))
+            elif urlparse(self.path).path in ("/login", "/login.html"):
+                q = dict(parse_qs(urlparse(self.path).query))
+                drive = (q.get("drive") or [""])[0]
+                self._html(serve_login_html(drive))
+            elif urlparse(self.path).path in ("/engines", "/engines.html"):
+                q = dict(parse_qs(urlparse(self.path).query))
+                self._html(serve_engines_html((q.get("url") or [""])[0]))
             elif self.path in ("/test", "/test.html"):
                 self._html(serve_test_html())
             elif self.path in ("/settings", "/settings.html"):
