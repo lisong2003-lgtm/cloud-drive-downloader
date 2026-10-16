@@ -1,7 +1,7 @@
 {
   "name": "cloud-drive-downloader",
-  "version": "0.14.2",
-  "description": "通用下载调度层：Agent/MCP/CLI、Web UI 与浏览器插件三类入口；支持 macOS/Windows/Linux；local 默认，NAS/服务器 Docker 可选。仅调度用户提供的链接，不解析分享页，不绕过登录/付费/限速/DRM。用户自行确保下载合法。",
+  "version": "0.18.0",
+  "description": "通用下载调度层：Agent/MCP/CLI、Web UI 与浏览器插件三类入口；支持 macOS/Windows/Linux；local 默认，NAS/服务器 Docker 可选。优先走官方网页会话/官方接口/浏览器捕获直链，不破解登录/付费/限速/风控/DRM。用户自行确保下载合法。",
   "author": "lis",
   "license": "CC-BY-NC-SA-4.0",
   "entry": "SKILL.md",
@@ -22,15 +22,18 @@
     "scripts/http_downloader/__init__.py",
     "scripts/http_downloader/downloader.py",
     "scripts/http_downloader/cli.py",
-    "scripts/hooks/post_media.sh"
+    "scripts/hooks/post_media.sh",
+    "scripts/pancli/tasklock.py",
+    "scripts/pancli/guard.py"
   ],
   "references": [
     "references/00-使用说明.md",
-    "references/33-Docker部署与一键搜索.md"
+    "references/33-Docker部署与一键搜索.md",
+    "references/39-单实例与续传安全.md"
   ],
   "tests": [
     "scripts/self_test.py"
   ],
   "privacy": "密码、Cookie、Token 只允许保存在系统凭据库，config 只保存 credential: 引用；不上传云端，不进 Git。",
-  "boundary": "不实现网盘私有协议，不绕过验证码/风控/限速/会员鉴权；用户对下载内容的合法性负责。"
+  "boundary": "只走官方网页会话、官方接口和用户触发的下载 URL；不破解登录/签名/风控/限速/会员鉴权；用户对下载内容的合法性负责。"
 }
