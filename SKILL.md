@@ -2,12 +2,12 @@
 name: cloud-drive-downloader
 slug: cloud-drive-downloader
 displayName: 网盘通
-version: "0.14.2"
+version: "0.18.0"
 author: lis
 license: CC-BY-NC-SA-4.0
-description: 通用下载调度层：Agent/MCP/CLI、Web UI 与浏览器插件三类入口；支持 macOS/Windows/Linux；local 默认，NAS/服务器 Docker 可选。仅调度用户提供的链接，不解析分享页，不绕过登录/付费/限速/DRM。用户自行确保下载合法。
+description: 通用下载调度层：Agent/MCP/CLI、Web UI 与浏览器插件三类入口；支持 macOS/Windows/Linux；local 默认，NAS/服务器 Docker 可选。优先走官方网页会话/官方接口/浏览器捕获直链，不破解登录/付费/限速/风控/DRM。用户自行确保下载合法。
 metadata:
-  version: "0.14.2"
+  version: "0.18.0"
 ---
 
 # 网盘通 · 通用下载调度层
@@ -22,8 +22,8 @@ metadata:
   └─→ 浏览器插件 ────────┘             └─→ Docker/远程引擎
 ```
 
-核心原则：**不实现网盘私有协议、不解析分享页、不提取直链、不绕过登录/付费/验证码/风控/DRM/限速**。
-插件不读取网页登录态，只投递用户主动提供的链接。用户对下载内容的合法性负全责；平台限制与工具失败如实报告。
+核心原则：只走**官方网页会话、官方接口、用户在官方网页触发的下载 URL**和通用直链；不破解、不伪造登录态、不绕过验证码/风控/会员/付费/DRM/限速。官方不给直链时安全失败。
+插件不读取网页登录态，只投递用户主动提供的链接。需要登录时**只用统一入口** `pan login <网盘> --qr`（百度扫码写 BaiduPCS-Go），禁止临时脚本直连网盘登录接口。用户对下载内容的合法性负全责；平台限制与工具失败如实报告。
 
 ## 三类通用入口
 
@@ -53,11 +53,19 @@ brew install aria2 yt-dlp rclone
 python3 <pan-root>/scripts/pan.py setup --mode local --root <download-dir> --port <port>
 python3 <pan-root>/scripts/pan.py doctor --json
 
-# 下载
+# 下载（普通终端会自动启动本地 Web UI，并打开实时状态页 /live）
 python3 <pan-root>/scripts/pan.py get "<链接>" --to <download-dir>
+# 不需要自动弹窗时：
+python3 <pan-root>/scripts/pan.py get "<链接>" --no-web
 
 # 本机 Web UI
 python3 <pan-root>/scripts/pan.py serve --host 127.0.0.1 --port <port>
+# 登录页：http://127.0.0.1:<port>/login
+# 进度页：http://127.0.0.1:<port>/live（实时显示进度、速度、剩余时间和下载位置）
+# 外部 BaiduPCS-Go 已在运行时，把它的进度日志接入同一个实时页：
+# python3 <pan-root>/scripts/pan.py live attach --log <日志> --target <下载目录> \
+#   --total-bytes <总字节> --files-total <文件数> --pid <BaiduPCS-Go PID> --open
+# --json、--events、MCP 和后台任务默认不弹窗；端口不可用时自动降级，下载继续。
 
 # Codex MCP：写入 <codex-home>/config.toml
 # [mcp_servers.pan-cloud-drive]
@@ -104,6 +112,9 @@ secret-tool lookup service pan-downloader
 ## 常用命令
 
 ```bash
+python3 <pan-root>/scripts/pan.py route "<链接>" --json --brief
+python3 <pan-root>/scripts/pan.py auth "<链接>" --json
+python3 <pan-root>/scripts/pan.py engines "<链接>" --json
 python3 <pan-root>/scripts/pan.py detect "<链接>"
 python3 <pan-root>/scripts/pan.py test "<链接>" --pwd <提取码>
 python3 <pan-root>/scripts/pan.py get "<链接>" --pwd <码> --dry-run
@@ -172,13 +183,40 @@ enabled = true
 - `scripts/pan.py`：CLI 轻入口。
 - `scripts/pancli/engine.py`：核心调度。
 - `scripts/pancli/engines.py`：引擎适配器。
+- `scripts/pancli/webengine.py`：零客户端网页引擎桥（逐文件任务、.part 续传、实时进度）。
+- `scripts/pancli/tasklock.py`：同来源单实例锁，防止多进程抢同一批文件。
+- `scripts/pancli/guard.py`：后台守护、限速采样、ETA 与错误分类。
+- `scripts/pancli/baidu_web.py`：百度官方网页会话驱动。
 - `scripts/pancli/report.py`：下载报告 / 实时速度 / 任务控制。
 - `scripts/pancli/setup.py`：doctor / setup / 向导 / MCP 指引。
 - `scripts/pancli/carriers.py`：任务、目录、直链、转存等载具逻辑。
 - `scripts/pancli/docker.py`：可选 Docker 部署与分片下载。
 - `scripts/pancli/remote.py`：远程 SSH/rclone/WebDAV/SMB/S3/mount。
 - `scripts/pancli/web.py`：Web UI 与 API。
+- `references/35-登录与WebUI统一流程.md`：跨网盘登录/授权与 Web UI 进度规范；`pan route --brief` 一次返回省 token 的登录门禁/预检/下一步，`pan auth` 做秒级本地门禁。
+- `references/36-WebUI实时进度规范.md`：Web UI 实时进度要求。
+- `references/37-零客户端引擎桥.md`：不装各家网盘客户端的官方网页会话、浏览器/AList/OAuth 桥与边界。
+- `references/38-百度官方网页会话桥.md`：百度默认零客户端流程、接口与安全失败边界。
+- `references/39-单实例与续传安全.md`：**同一来源只允许一个下载进程**、续传禁用 `--ow`、后台用双 fork 守护化、限速如实报告与错误分类。
+- `OPENING_PROMPT.md`：网盘通维护开工提示词。
+- `TOKEN_SAVING_PLAN.md`：省 token 与长会话规则。
 - `scripts/self_test.py`：离线自检。
+
+## 单实例与续传安全（v0.16.0 硬规则）
+
+2026-10-15 实测教训：同来源起多个下载进程会互相抢带宽/覆盖断点，表现为"跑了很久没进展"。
+
+- **同一 `(drive, source, target)` 只允许一个下载进程**；计划步骤/官方网页路径带锁，抢不到直接退出码 `9`。
+  查看/清理：`pan guard status`、`pan guard clean`。
+- **续传一律禁止 `--ow`**：会让已下分片从头重下；计划构建阶段自动剥离（含 config 里写死的）。
+- **后台常驻用双 fork**：`pan guard daemon --cmd '...' --log <日志>`，不要用 `nohup ... &`。
+- **限速如实报告、不混同登录失败**：`pan guard speed --target <目录>` 采样；低于 200 KB/s 判定为
+  网盘侧限速/免费账号特征，输出明确提示，不破解限速。`pan guard eta` 换算剩余时间。
+- **错误分类**：`pan guard error --text '<原始错误>'` → login_required / dlink_missing / captcha /
+  risk_control / http_403 / not_found / disk_full / throttle，并给处置建议。
+- **扫码稳定**：百度只走 `pan login baidu --qr`；每次生成时间戳+随机后缀的唯一二维码文件，避免扫到缓存旧码。
+
+详见 `references/39-单实例与续传安全.md`。
 
 ## 测试
 
