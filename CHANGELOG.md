@@ -1,3 +1,77 @@
+## 2026-10-16 v0.18.0（100% 优化：10 秒刷新 + 下载请求提速）
+
+- Web UI 任务中心和 `/live` 实时页刷新统一改为每 10 秒；粘贴/输入投递延迟从 50ms/350ms 降到 0ms/120ms，提交后立刻回执「已受理」与本地服务耗时。
+- `/api/download` 响应提速：整批只读一次 `load_config()`（原来逐条读盘约 0.4ms/条）；单链接保持同步派发（PID/插件语义不变）；多链接改为后台线程派发，HTTP 响应时间不再随链接数线性增长，实测 50 条链接从 2700ms 降到 10ms。
+- 新增响应字段 `accepted`、`queued`、`async`、`accepted_at`、`dispatch_ms`、`live_url`；单链接同时返回顶层 `pid`，Chrome 插件 `data.pid` 语义不变。
+- 接收链接阶段仍是纯本机毫秒级检查（登录门禁/路由识别），不发起任何网络请求。
+- 自检由 462 项增至 474 项；`manifest.json` / `SKILL.md` 版本同步 `0.18.0`。
+
+## 2026-10-16 v0.17.0（外部引擎日志接入 Web UI）
+
+- 新增 `pan live attach`：把外部 BaiduPCS-Go 进度日志接入 Web UI，显示分享总进度、当前批次百分比、活动分片、速度、ETA、当前文件和绝对下载位置。
+- `/live` 增加“总进度”列；外部日志的 0 B/s 如实显示为百度端限速或等待分片，保留断点，不误报速度。
+- 修复 `ensure_web_ui()` 复用已有服务时未按预期打开 `/live` 的回归；未注入监控样本时不再用接入前字节计算虚高速度。
+- 自检新增外部日志解析、真实 HTTP `/live` 渲染和 `live attach --once` 端到端覆盖，断言由 451 项增至 462 项。
+
+## 2026-10-15 v0.16.0（单实例锁 · 续传安全 · 限速诚实报告）
+
+- 新增 `scripts/pancli/tasklock.py`：按 `(drive, source, target)` 生成单实例锁；同来源重复启动会被拒绝并返回退出码 `9`，陈旧锁可自动接管/清理。
+- `scripts/pancli/engine.py`：百度 BaiduPCS 下载步骤和官方网页会话路径自动挂锁；自动移除 `--ow`、补 `--retry 5`；支持 `pan guard` 子命令。
+- 新增 `scripts/pancli/guard.py`：双 fork + `setsid` 后台守护、吞吐采样、ETA 预估、统一错误分类与处置建议。
+- `scripts/pancli/baidu_login.py`：二维码路径加入时间戳和随机后缀，避免复用同一文件被缓存后扫到旧码。
+- 新增 `references/39-单实例与续传安全.md`：记录已验证的扫码→转存→断点续传成功流程，以及多进程抢文件、`--ow` 重下、`nohup` 被回收、限速误判等失败教训。
+- 自检覆盖单实例互斥、陈旧锁、`--ow` 剥离、守护进程存活、错误分类和 ETA；版本 `0.16.0`。
+
+## 2026-10-15 v0.15.0（百度零客户端网页会话桥）
+
+- 百度分享默认路由从 `baidupcs` 改为 `baiduweb`；匿名网页会话不阻塞投递，链接内 `pwd` 自动识别。
+- 新增 `pancli/webengine.py` 通用网页桥：分享页探测、递归目录、同名目录结构、逐文件任务、`.part` 断点续传、失败重试和实时进度。
+- 新增 `pancli/baidu_web.py` 官方网页驱动：只使用官方分享页/接口，进程内 CookieJar，不持久化、不读取浏览器 Cookie、不输出会话字段。
+- Web UI 改为投递后自动开始，2 秒任务刷新；任务中心展示文件名、总进度、当前文件、完成/失败数、速度、剩余时间、状态和本地路径。
+- 修复 Web 子模块后台启动/重试入口指向 `pancli/web.py` 的问题，并保留提取码在任务控制中的可重试路径。
+- 修复百度官方 `/api/sharedownload` 请求体编码：改回官方前端使用的表单编码，避免 JSON 请求导致直链失败。
+- 报告与实时状态中的分享提取码统一脱敏为 `pwd=***`。
+- 官方接口返回验证码、风控、会员、付费或违规限制时逐项安全失败；不绕过任何平台限制。
+
+## Unreleased（本地迭代 R22：路由与诊断缓存）
+
+- `route_link_payload()` 增加同参数 2 秒短缓存；配置内容或百度本机登录态变化自动失效。
+- CLI 新增 `pan route --no-cache`，登录/配置变化后可强制复核。
+- `/api/diagnostics` 增加 30 秒缓存；`?refresh=1` 强制刷新，响应带 `cache_hit/cache_ttl_seconds/checked_at`。
+- 省 token 方案文档同步更新。
+## Unreleased（本地迭代 R21：省 token 路由）
+
+- `pan route --brief` 新增最小 JSON：Agent 只看 `next_action/login_url/missing/target` 等决策字段。
+- MCP `pan_route` 默认使用 brief，减少对话 token。
+- `load_config()` 增加 mtime/size/inode 缓存；保存后自动刷新缓存。
+- 新增开工提示词和省 token 方案文档。
+## Unreleased（本地迭代 R20：一次路由提速）
+
+- 新增 `pan route <链接> --json`：识别、登录门禁、依赖、目标目录、提取码、零客户端桥和下一步动作一次返回。
+- 新增 `/api/route`，测试页改用一次请求完成预检，不再分多次接口查询。
+- MCP 新增 `pan_route`，Agent 收到链接后只调一次即可决定登录/配置/下载。
+- 本地路由耗时输出 `latency_ms`；示例百度链接内部路由约 `8ms`，CLI 冷启动约 `0.39s`。
+## Unreleased（本地迭代 R19：零客户端引擎桥）
+
+- 新增 `pan engines` / `/api/engines` / `/engines`：统一展示浏览器直链捕获桥、AList 驱动桥、OAuth/WebDAV 桥和本地兼容回退。
+- 浏览器插件增加 `chrome.downloads.onCreated` 零客户端捕获模式：用户在官方网页主动触发下载时捕获直链交给网盘通；不读取登录态。
+- 插件失败时自动打开 `/login?drive=<网盘>`，并在弹窗提供捕获开关。
+- MCP 新增 `pan_auth` 和 `pan_engines`。
+- 明确边界：零客户端指不装各家桌面客户端，不是绕过登录、签名、风控、限速或 DRM；官方不给直链时必须失败。
+## Unreleased（本地迭代 R18：秒级登录门禁）
+
+- 新增 `pan auth <链接> --json`：收到链接后立即做纯本地登录/授权检查，不联网、不读凭据明文。
+- `pan detect` 返回 `auth`，Agent 不用等下载失败才知道需要登录。
+- `pan test` 增加登录/授权检查；`/api/test` 返回 `login_required` 和 `/login?drive=<网盘>`。
+- Web UI `/api/download` 投递前先做登录门禁；需要登录时立即返回并自动打开统一登录页。
+- `/login` 支持 `?drive=<网盘>` 定位提示；规则文档与自检同步。
+## Unreleased（本地迭代 R17：登录 / WebUI 回归整改）
+
+- 复盘百度网盘案例：未登录、网页端大文件客户端限制、临时脚本绕开 Web UI 是本次体验失控的根因。
+- 新增统一规则 `references/35-登录与WebUI统一流程.md`：所有网盘先走官方扫码/OAuth/浏览器授权，凭据禁止进聊天。
+- 新增 WebUI 规范 `references/36-WebUI实时进度规范.md`：任务状态、进度、速度、目标路径必须进入 `/` 和 `/live`，Agent 不做聊天轮询。
+- `web.py` 新增 `/login` 统一登录/授权入口，并在导航中接入任务中心。
+- `SKILL.md`、`README.md` 补充 `/login` 和统一规则；离线自检覆盖规则文档与关键路由。
 ## 2026-10-14 v0.14.2（安全扫描整改）
 
 - `setup` 不再代跑包管理器；只输出安装建议，由用户复核后手动执行。
