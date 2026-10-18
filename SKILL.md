@@ -2,12 +2,12 @@
 name: cloud-drive-downloader
 slug: cloud-drive-downloader
 displayName: 网盘通
-version: "0.18.0"
+version: "0.18.2"
 author: lis
 license: CC-BY-NC-SA-4.0
 description: 通用下载调度层：Agent/MCP/CLI、Web UI 与浏览器插件三类入口；支持 macOS/Windows/Linux；local 默认，NAS/服务器 Docker 可选。优先走官方网页会话/官方接口/浏览器捕获直链，不破解登录/付费/限速/风控/DRM。用户自行确保下载合法。
 metadata:
-  version: "0.18.0"
+  version: "0.18.2"
 ---
 
 # 网盘通 · 通用下载调度层
@@ -224,6 +224,12 @@ enabled = true
 python3 <pan-root>/scripts/self_test.py
 python3 <pan-root>/scripts/pan.py docker check --json
 ```
+
+## 支持边界
+
+- 已登记网盘与四类非百度路由（官方网页会话桥/浏览器直链桥/AList/OAuth-WebDAV）见 `references/40-网盘支持矩阵.md`。
+- 各盘真机验证的最小授权方式见 `references/41-真机验证权限清单.md`；未授权前对应盘标记「待用户提供」，不虚报真机结果。
+- 未登记盘名一律标“不支持/需接入”，不得当作 HTTP 直链抓取分享页；接入流程见 `references/06-扩展新网盘.md`。
 
 ## 权限边界
 
