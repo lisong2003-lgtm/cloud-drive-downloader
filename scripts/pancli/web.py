@@ -463,15 +463,18 @@ def render_live_table(live):
             "detail": detail, "active_shards": active_shards,
         })
         detail_html = ("<div class=tip>%s</div>" % _html.escape(detail)) if detail else ""
+        drive_name_html = _html.escape(str(item.get("drive_name", "")))
+        current_step_html = _html.escape(str(item.get("current_step", "")))
+        updated_html = _html.escape(str(item.get("updated", "")))
         rows.append(
             "<tr><td>%s</td><td>%s</td><td><span class=speed>%s KB/s</span></td>"
             "<td>%s KB/s</td><td>%s</td><td>%s</td><td>%s</td>"
             "<td><span class='badge %s'>%s</span>%s</td>"
             "<td class=mono>%s<button class=copy type=button data-path=\"%s\">复制路径</button></td>"
             "<td class=mono>%s</td></tr>" % (
-                item.get("drive_name", ""), item.get("current_step", ""),
+                drive_name_html, current_step_html,
                 sps, avs, btxt, pct, ets, badge, badge, detail_html, local_path_text,
-                local_path_attr, item.get("updated", "")))
+                local_path_attr, updated_html))
     items_json = json.dumps(shown, ensure_ascii=False)
     table = ("<thead><tr><th>网盘</th><th>当前文件 / 步骤</th><th>实时速度</th>"
              "<th>平均速度</th><th>已下载</th><th>总进度</th><th>剩余时间</th><th>状态</th>"
@@ -483,6 +486,8 @@ def render_live_table(live):
 
 def serve_live_page_html(content, items_json="[]"):
     """渲染实时速度页 HTML（与任务中心同款深色风格），items_json 供前端画速度曲线。"""
+    _json_esc = items_json.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e") \
+        .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     return ("""<!doctype html><html lang=zh-CN><head><meta charset=utf-8>"""
             """<meta name=viewport content="width=device-width,initial-scale=1">"""
             """<meta http-equiv=refresh content=2><title>多网盘实时速度</title>"""
@@ -523,7 +528,7 @@ tr:last-child td{border-bottom:none}
 <a href=/guide>使用教程</a><a href=/login>登录</a><a href=/>任务中心</a><a href=/api/live>API 实时</a><a href=/api/status>API 状态</a>
 </div></header>
 <p class=hint>下载位置显示在任务行右侧，点击“复制路径”即可复制到剪贴板。</p>
-<div class=panel><table>%(content)s</table><div id="CURVE_DATA" style="display:none">%(items_json)s</div></div>
+<div class=panel><table>%(content)s</table><div id="CURVE_DATA" style="display:none">%(_json_esc)s</div></div>
 <script>
 function fallbackCopy(text, done) {
   const ta = document.createElement('textarea');
@@ -551,9 +556,16 @@ document.addEventListener('click', e => {
     const his = d.history || [];
     const div = document.createElement('div');
     div.className = 'card';
-    div.innerHTML = '<h4>' + d.name + '</h4><canvas width="600" height="140"></canvas><div class="meta">当前 ' + d.speed + ' KB/s · 平均 ' + d.avg + ' KB/s<br>已下载 ' + d.done + ' · 剩余 ' + d.eta + (d.percent != null ? ' · ' + d.percent + '%%' : '') + '</div>';
+    const h = document.createElement('h4');
+    h.textContent = d.name || '';
+    const canv = document.createElement('canvas');
+    canv.width = 600; canv.height = 140;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = '当前 ' + (d.speed || '') + ' KB/s · 平均 ' + (d.avg || '') + ' KB/s\n已下载 ' + (d.done || '') + ' · 剩余 ' + (d.eta || '') + (d.percent != null ? ' · ' + d.percent + '%%' : '');
+    div.appendChild(h); div.appendChild(canv); div.appendChild(meta);
     wrap.appendChild(div);
-    const cv = div.querySelector('canvas');
+    const cv = canv;
     const ctx = cv.getContext('2d');
     ctx.clearRect(0, 0, cv.width, cv.height);
     ctx.strokeStyle = '#475569'; ctx.lineWidth = 1;
@@ -582,7 +594,7 @@ document.addEventListener('click', e => {
 })();
 setInterval(() => { if (!document.hidden) location.reload(); }, 10000);
 </script>
-</div></body></html>""" % {"content": content, "items_json": items_json})
+</div></body></html>""" % {"content": content, "_json_esc": _json_esc})
 
 
 def serve_guide_html():
