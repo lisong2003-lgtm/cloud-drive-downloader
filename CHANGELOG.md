@@ -1,3 +1,16 @@
+## 2026-10-18 v0.18.2（真机验证权限清单 + 依赖声明 + 三平台版本对齐）
+
+- 新增 `references/41-真机验证权限清单.md`：按盘列出最小授权方式（扫码/浏览器登录项、AList 挂载地址、OAuth/WebDAV、分享链接），未授权盘统一标记「待用户提供」，不虚报真机数；本轮授权状态待用户提供。
+- 新增 `NOTICE.md`：明确 aria2 / yt-dlp / rclone / AList / BaiduPCS-Go / quark-cli / WebDAV 等为第三方依赖，随包 `tools/pylib/yt_dlp/` 为 yt-dlp 项目源码，发布包不含真实 token/账号。
+- `README.md` / `SKILL.md` / `manifest.json` / `references/40-网盘支持矩阵.md` / `references/25-真机验证清单.md` 同步补充权限清单入口与版本号 0.18.2。
+- `scripts/self_test.py` 自检由 474 项增至 482 项：新增 NOTICE.md / references/41 权限清单 / 版本一致性断言；全部 PASS。
+
+## 2026-10-18 v0.18.1（支持边界文档补充，功能零改动）
+
+- 新增 `references/40-网盘支持矩阵.md`：以 `scripts/pancli/engine.py` 的 `DRIVES` 注册表为准，列出全部已登记网盘、主域名、默认引擎、可用零客户端桥与参考文档；标注四类非百度路由（官方网页会话桥/浏览器直链桥/AList/OAuth-WebDAV）。
+- 明确列出新浪微盘、华为网盘、360 云盘、永硕 E 盘、纳米盘等未接入盘名：一律“不支持/需接入”，不得当成 HTTP 直链抓取分享页。
+- README / SKILL.md 增加“支持边界”入口；`scripts/self_test.py` 474 项自检保持全绿。
+
 ## 2026-10-16 v0.18.0（100% 优化：10 秒刷新 + 下载请求提速）
 
 - Web UI 任务中心和 `/live` 实时页刷新统一改为每 10 秒；粘贴/输入投递延迟从 50ms/350ms 降到 0ms/120ms，提交后立刻回执「已受理」与本地服务耗时。
