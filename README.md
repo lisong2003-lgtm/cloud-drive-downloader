@@ -31,3 +31,9 @@
 - 低速度先用 `python3 scripts/pan.py guard speed --target <目录> --seconds 20` 采样；低于 200 KB/s 会提示网盘侧限速/免费账号特征，不混同登录失败。
 - 错误先用 `python3 scripts/pan.py guard error --text '<原始错误>'` 归类，再按返回的 `remediation` 处理。
 
+
+## 支持边界（v0.18.2）
+
+- 非百度路由：浏览器直链捕获桥通用于所有官方网页登录；AList 驱动桥覆盖绝大多数已登记盘（阿里/夸克/天翼/迅雷/115/123/移动/联通/UC/PikPak/OneDrive/Google/Dropbox/微云/蓝奏等）；OAuth/WebDAV 桥覆盖官方开放平台与 WebDAV 盘（坚果云等）。
+- 明确“不支持/需接入”的盘名与判定规则见 `references/40-网盘支持矩阵.md`；未接入盘不得当作 HTTP 直链抓取分享页，必须标“不支持/需接入”。
+- 各盘真机验证的最小授权方式见 `references/41-真机验证权限清单.md`；未授权前对应盘标记“待用户提供”，不虚报真机数。第三方依赖说明见 `NOTICE.md`。
