@@ -37,12 +37,12 @@ def load_module():
     # 让 pan.* 可见 Web / 搜索 / Docker 子模块函数（保持原有测试/调用习惯）
     from pancli import web as _web_mod
     for _web_name in (
-        "read_report_summary", "serve_reports_json", "serve_live_json",
+        "read_report_summary", "serve_reports_json", "serve_live_json", "render_live_table",
         "serve_unified_tasks", "_spawn_retry_task", "serve_task_controls",
         "_locate_task_control", "_apply_task_action", "_spawn_download_task",
         "serve_live_page_html", "serve_guide_html", "pwa_manifest_json",
         "pwa_service_worker_js", "pwa_icon_png", "serve_home_html",
-        "serve_test_html", "cmd_serve",
+        "serve_test_html", "cmd_serve", "ensure_web_ui", "web_state_root",
     ):
         setattr(mod, _web_name, getattr(_web_mod, _web_name))
     from pancli import search_movie as _search_mod
@@ -91,6 +91,8 @@ def load_module():
     for _report_name in (
         "report_path_for_target", "write_download_report", "run_completion_hook",
         "LIVE_FILE_NAME", "live_file_for", "LiveMonitor", "TASK_FILE_NAME",
+        "size_text_to_bytes", "duration_text_to_seconds", "parse_baidupcs_progress",
+        "read_text_tail", "cmd_live_attach",
         "_task_file_for_dir", "read_task_records", "_atomic_write_json",
         "task_control_file_for", "_task_id", "TaskControl", "_signal_group",
         "_terminate_group", "_wait_controlled", "_run_step_controlled",
@@ -216,12 +218,14 @@ def main():
     assert "yt-dlp" in p_stream["steps"][0]["argv"][0] or "yt-dlp" in p_stream["missing"], p_stream
     checks += 3
 
-    # 7) 百度分享计划（未装引擎时给缺失项和两步计划）
+    # 7) 百度分享默认走官方网页会话，不要求桌面客户端或登录门禁
     p2 = pan.build_plan("https://pan.baidu.com/s/1abc", pwd="1234", cfg=cfg)
-    assert p2["drive"] == "baidu" and p2["engine"] == "baidupcs"
-    assert len(p2["steps"]) == 2 and p2["steps"][0]["argv"][1] == "transfer"
-    assert "BaiduPCS-Go" in p2["missing"], p2["missing"]
-    checks += 3
+    assert p2["drive"] == "baidu" and p2["engine"] == "baiduweb", p2
+    assert p2["web"]["driver"] == "baidu" and p2["web"]["pwd"] == "1234", p2
+    assert p2["auth"]["required"] is False and p2["auth"]["blocking"] is False, p2["auth"]
+    assert not p2["missing"] and len(p2["steps"]) == 1, p2
+    assert p2["steps"][0]["engine"] == "baiduweb" and p2["zero_client"][0]["id"] == "web", p2
+    checks += 5
 
     # 8) 自定义引擎模板
     cfg2 = json.loads(json.dumps(cfg))
@@ -286,7 +290,8 @@ def main():
     })()
     rc, output = capture_call(pan.cmd_get, dry_args)
     assert rc == 0, (rc, output)
-    assert "缺少依赖" in output and "DRY-RUN:" in output and "DRY-RUN 完成" in output, output
+    assert "百度官方网页会话" in output and "DRY-RUN 完成" in output, output
+    assert "缺少依赖" not in output, output
     checks += 3
 
     # 13) VIP 参数只影响并发，不做绕过
@@ -420,6 +425,7 @@ def main():
 
     # 23) 实时速度监控：config 默认键 + live 文件生成与结束状态
     assert example["http"].get("live_status") is True, "config.example http.live_status 缺失"
+    assert example["http"].get("auto_web") is True, "config.example http.auto_web 缺失"
     assert "live_interval" in example["http"] and "live_dir" in example["http"], "config.example live 键缺失"
     assert pan.LIVE_FILE_NAME == "下载速度.live.json"
     live_cfg = json.loads(json.dumps(cfg))
@@ -441,7 +447,49 @@ def main():
     assert again["state"] == "done", again
     live_path = pan.live_file_for(live_cfg, live_plan)
     assert live_path.exists() and "下载速度" in live_path.name
-    checks += 5
+    assert pan.web_state_root(live_cfg) == Path(live_cfg["http"]["live_dir"])
+    assert live_path.parent.parent == Path(live_cfg["http"]["live_dir"])
+    checks += 7
+
+    # 23b) 外部 BaiduPCS-Go 日志接入 /live：分片速度、0B/s 停滞提示、下载位置
+    assert pan.size_text_to_bytes("12.5MB") == 13107200
+    assert pan.duration_text_to_seconds("1h2m3s") == 3723.0
+    baidu_log = TMP / "baidu-download.log"
+    baidu_log.write_text(
+        "[7] 加入下载队列: /网盘下载/园林CAD植物苗木表.zip\n"
+        "[7] 将会下载到路径: %s\n"
+        "[7] ↓ 4.76MB/21.98MB 0B/s in 57m1s, left - ...\n"
+        "[8] 加入下载队列: /网盘下载/09-区.zip\n"
+        "[8] 将会下载到路径: %s\n"
+        "[8] ↓ 8.88MB/43.62MB 67.27KB/s in 57m4s, left 8m48s ...\n" % (target / "园林CAD植物苗木表.zip", target / "09-区.zip"),
+        encoding="utf-8",
+    )
+    parsed = pan.parse_baidupcs_progress(pan.read_text_tail(baidu_log))
+    assert parsed["ok"] and parsed["active_shards"] == 2, parsed
+    assert parsed["batch_done_bytes"] == int(4.76 * 1048576) + int(8.88 * 1048576), parsed
+    assert parsed["speed_kbps"] == 67.27 and parsed["stalled"] is False, parsed
+    ext_cfg = json.loads(json.dumps(live_cfg))
+    ext_cfg["http"]["live_dir"] = str(TMP / "baidu-live")
+    ext_plan = dict(live_plan)
+    ext_plan["engine"] = "baidupcs"
+    ext_plan["drive"] = "baidu"
+    ext_plan["target"] = str(target)
+    ext_mon = pan.LiveMonitor(ext_cfg, ext_plan, url="https://pan.baidu.com/s/1x?pwd=1234", interval=0.3, progress_log=baidu_log)
+    ext_mon.set_total_bytes(4477657753)
+    ext_mon.files_total = 16
+    ext_body = ext_mon.write(state="running")
+    assert ext_body["active_shards"] == 2 and ext_body["batch_percent"] is not None, ext_body
+    assert ext_body["speed_kbps"] == 67.27 and ext_body["local_path"].endswith("09-区.zip"), ext_body
+    assert ("pwd=***" in ext_body["url"] or "pwd=%2A%2A%2A" in ext_body["url"]) and "1234" not in ext_body["url"], ext_body["url"]
+    live_html, _ = pan.render_live_table([ext_body])
+    assert "总进度" in live_html and "当前批次" in live_html and "复制路径" in live_html, live_html[:500]
+    checks += 1
+    once = types.SimpleNamespace(log=str(baidu_log), target=str(target), total_bytes=100, files_total=1,
+                                 url="", pid=0, interval=0.3, state_dir=str(TMP / "baidu-once"),
+                                 once=True, open=False, json=True)
+    rc, out = capture_call(pan.cmd_live_attach, once)
+    assert rc == 0 and json.loads(out)["batch_total_bytes"] > 0, (rc, out)
+    checks += 9
 
     # 24) 任务控制：登记文件 + 状态机 + serve 统一任务表合并 + 控制动作
     assert pan.TASK_FILE_NAME == "任务控制.json"
@@ -516,8 +564,8 @@ def main():
         assert pid == "12345", pid
         av = captured.get("argv") or []
         extra = set(av[4:])
-        assert av[:4] == [sys.executable, str((HERE / "pancli" / "web.py").resolve()), "get", "https://example.com/movie.zip"]
-        assert {"--pwd", "ab12", "--to", "/tmp/out", "--engine", "alist", "--tier", "free", "--path", "share/folder"} <= extra, av
+        assert av[:4] == [sys.executable, str((HERE / "pan.py").resolve()), "get", "https://example.com/movie.zip"], av
+        assert {"--live", "--no-web", "--pwd", "ab12", "--to", "/tmp/out", "--engine", "alist", "--tier", "free", "--path", "share/folder"} <= extra, av
         # 空链接不启动子进程
         pid2, err2 = pan._spawn_download_task("   ")
         assert pid2 == "" and err2, (pid2, err2)
@@ -578,20 +626,20 @@ def main():
 
     # 27) 任务中心首页 HTML 回归：width:100%% 必须转义，空任务与有任务都能渲染
     html0 = pan.serve_home_html([])
-    assert "网盘通控制台" in html0 and "暂无任务" in html0
+    assert "网盘通" in html0 and "暂无任务" in html0
     assert "width:100%" in html0, "页面 CSS 应输出 width:100%"
     sample_task = {
         "id": "T-1", "drive_name": "百度网盘", "drive": "baidu", "current_step": "下载中",
         "speed_kbps": 12.5, "avg_speed_kbps": 10.0, "state": "running",
-        "engine": "alist", "updated": "2026-10-08 16:00", "finished": ""
+        "engine": "baiduweb", "updated": "2026-10-08 16:00", "finished": ""
     }
     html1 = pan.serve_home_html([sample_task])
-    assert "网盘通控制台" in html1 and "12.5" in html1 and "bar" in html1
+    assert "网盘通" in html1 and "taskHtml" in html1 and "bar" in html1
     assert "暂停" in html1 and "删除" in html1
-    # 有任务时 CSS 中的 % 不会当作格式化占位符
+    assert "setInterval(loadTasks,10000)" in html1 and "/api/tasks" in html1
     assert "width:100%" in html1
     assert html1.count("%s") == 0, "模板不应残留未替换 %s"
-    checks += 8
+    checks += 9
 
     # 28) 智能默认：自动分类归档 + PWA 清单/离线外壳
     assert pan.content_category("https://example.com/movie.mp4") == "影视"
@@ -646,6 +694,16 @@ def main():
     lv = pan.serve_live_page_html("<tr></tr>", items_json='[{"history":[[0,12.5],[1,20.0]],"eta":"约 5 秒"}]')
     assert "CURVE_DATA" in lv and "charts" in lv and "canvas" in lv, lv[:200]
     assert "约 5 秒" in lv, lv
+    _live_body, _live_items = pan.render_live_table([{
+        "state": "running", "drive_name": "HTTP 直链", "current_step": "data.bin",
+        "speed_kbps": 632.5, "avg_speed_kbps": 500.0, "bytes_done": 4194304,
+        "total_bytes": 4194304, "percent": 100.0, "eta_seconds": 7.2,
+        "local_path": str(TMP / "live-out"), "current_file": "data.bin", "history": [[0, 1]],
+    }])
+    assert "下载位置" in _live_body and "复制路径" in _live_body and "data.bin" in _live_body, _live_body
+    assert json.loads(_live_items)[0]["path"].endswith("/data.bin"), _live_items
+    _empty_body, _empty_items = pan.render_live_table([])
+    assert "暂无进行中的实时下载" in _empty_body and _empty_items == "[]", (_empty_body, _empty_items)
     # probe 解析 Content-Length（构造 dummy 子进程返回）
     import subprocess as _sp2
     real_run = pan.subprocess.run
@@ -654,7 +712,7 @@ def main():
         assert pan.probe_http_total_bytes("https://example.com/a.zip", curve_cfg) == 12345
     finally:
         pan.subprocess.run = real_run
-    checks += 8
+    checks += 11
 
     # 30) 配置向导增强：pan test 只读测试连接 / API test / MCP pan_test 工具
     res = pan._probe_link_checks(cfg, "https://example.com/a.zip")
@@ -664,8 +722,9 @@ def main():
     assert res["target"] and str(res["target"]).startswith(str(TMP)), res["target"]
     res_bd = pan._probe_link_checks(cfg, "https://pan.baidu.com/s/1abcdEFG")
     assert res_bd["drive"] == "baidu" and res_bd["drive_name"] == "百度网盘", res_bd
-    # 直链即使未装 aria2 也 ok（http 引擎用 curl）；百度缺 BaiduPCS-Go 时 ok=False 且给出缺失项
-    assert res_bd["ok"] is False and res_bd["missing"], res_bd
+    # 百度默认官方网页会话，不需要 BaiduPCS-Go；预检应给出可零客户端执行的计划
+    assert res_bd["ok"] is True and res_bd["engine"] == "baiduweb", res_bd
+    assert res_bd["auth"]["blocking"] is False and res_bd["zero_client"][0]["id"] == "web", res_bd
     rc, out = capture_call(pan.cmd_test, types.SimpleNamespace(url="https://example.com/a.zip", json=True, pwd="", engine="", tier="", path=""))
     assert rc == 0 and json.loads(out)["drive"] == "direct", (rc, out)
     # MCP tools 里有 pan_test，且 call_tool 会拼出 test 命令（不真正跑 subprocess，避免联网）
@@ -678,13 +737,34 @@ def main():
     home = pan.serve_home_html([])
     assert "href=/test" in home, "任务中心缺测试连接入口"
     assert "testForm" in pan.serve_test_html() and "testUrl" in pan.serve_test_html(), "测试页缺少表单"
-    assert "fetch('/api/test?'" in pan.serve_test_html(), "测试页缺少 /api/test 调用"
+    assert "fetch('/api/route?'" in pan.serve_test_html(), "测试页缺少 /api/route 调用"
     assert pan.serve_test_html().count("%s") == 0, "测试页不应残留未替换 %s"
     assert "caches.open(CACHE)" in pan.pwa_service_worker_js() and "'/test'" in pan.pwa_service_worker_js(), "PWA 缓存未含 /test"
     assert '"/test"' in (_PAN_PY.read_text(encoding='utf-8') + _PAN_WEB.read_text(encoding='utf-8')) or "'/test'" in (_PAN_PY.read_text(encoding='utf-8') + _PAN_WEB.read_text(encoding='utf-8')), "serve 路由未注册 /test"
     rc, out = capture_call(pan.cmd_test, types.SimpleNamespace(url="https://example.com/a.zip", json=True, pwd="", engine="", tier="", path=""))
     assert rc == 0 and json.loads(out)["ok"] is True, (rc, out)
-    checks += 5
+    # 自动 Web UI：复用已运行服务并打开 /live，不启动真实子进程
+    from pancli import web as _web_auto
+    _saved_ready, _saved_browser = _web_auto._web_ui_status_ok, _web_auto.webbrowser.open
+    _opened = []
+    _web_auto._web_ui_status_ok = lambda port, timeout=0.35, expected_reports_dir="": int(port) == 17890
+    _web_auto.webbrowser.open = lambda url, new=1: _opened.append(url) or True
+    try:
+        _auto = pan.ensure_web_ui({"http": {"auto_web": True}, "deployment": {"web_port": 17890}})
+    finally:
+        _web_auto._web_ui_status_ok, _web_auto.webbrowser.open = _saved_ready, _saved_browser
+    assert _auto["ok"] and _auto["reused"] and _auto["browser_opened"], _auto
+    assert _opened == ["http://127.0.0.1:17890/live"], _opened
+    assert not pan.ensure_web_ui({"http": {"auto_web": False}})["ok"], "auto_web=false 不应启动"
+    parser_src = _PAN_PY.read_text(encoding="utf-8")
+    assert '"--no-web"' in parser_src and '"auto_web": True' in parser_src, "CLI/config 缺自动 Web 开关"
+    home_auto = pan.serve_home_html([])
+    live_auto = pan.serve_live_page_html("<tr></tr>")
+    assert "复制路径" in home_auto and "下载位置" in home_auto, "任务中心缺下载位置/复制路径"
+    assert "复制路径" in live_auto and "下载位置" in live_auto, "实时页缺下载位置/复制路径"
+    assert "setInterval" in live_auto and "location.reload" in live_auto, "实时页缺自动刷新"
+    assert "}, 10000);" in live_auto, "实时页应每 10 秒刷新一次"
+    checks += 9
 
     # 32) 1-4 项优化：后处理链样板 / 扩展弹窗测试连接 / 提取码提示 / --at 定时骨架
     hook_sh = HERE.parent / "scripts" / "hooks" / "post_media.sh"
@@ -709,8 +789,8 @@ def main():
     # 33) 第 1 步：网页/Agent 一站式——首页下载表单、剪贴板监听、一键启动脚本
     from pancli import web as _web_mod
     home2 = _web_mod.serve_home_html([])
-    assert "start" in home2 and "url" in home2 and "/api/download" in home2 and "批量下载" in home2, "首页缺下载表单"
-    assert "render" in home2 and "/api/tasks" in home2, "首页投递后应刷新任务"
+    assert "submitUrls" in home2 and "/api/download" in home2 and "无需点击开始" in home2, "首页缺自动投递表单"
+    assert "loadTasks" in home2 and "/api/tasks" in home2 and "setInterval(loadTasks,10000)" in home2, "首页投递后应自动刷新任务"
     # /api/download 返回 live_url / home_url 字段（在 do_POST 代码里检查真实字符串）
     assert 'live_url' in _PAN_WEB.read_text(encoding="utf-8"), "web.py 缺 live_url 响应字段"
     assert 'home_url' in _PAN_WEB.read_text(encoding="utf-8"), "web.py 缺 home_url 响应字段"
@@ -1066,6 +1146,293 @@ def main():
     for tok in ("pan_get", "pan_task"):
         assert tok in code_mcp, "pan_mcp 缺 %s" % tok
     checks += 5
+
+    # 62) R17 登录与 WebUI 统一流程
+    ref35 = skill_root / "references" / "35-登录与WebUI统一流程.md"
+    ref36 = skill_root / "references" / "36-WebUI实时进度规范.md"
+    assert ref35.exists(), "references/35 登录统一流程缺失"
+    assert ref36.exists(), "references/36 WebUI 进度规范缺失"
+    t35 = ref35.read_text(encoding="utf-8")
+    t36 = ref36.read_text(encoding="utf-8")
+    for tok in ("官方 OAuth / 扫码 / 浏览器授权", "不要把密码、Cookie、BDUSS、STOKEN", "/login"):
+        assert tok in t35, "35 缺 %s" % tok
+    for tok in ("任务必须可见", "下载中不做聊天轮询", "用临时脚本绕开 Web UI"):
+        assert tok in t36, "36 缺 %s" % tok
+    code_web = _PAN_WEB.read_text(encoding="utf-8")
+    for tok in ("def serve_login_html", '("/login", "/login.html")', 'href=/login', "官方登录优先"):
+        assert tok in code_web, "web.py 缺登录页关键点 %s" % tok
+    skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+    readme_text = (skill_root / "README.md").read_text(encoding="utf-8")
+    assert "/login" in skill_text and "/login" in readme_text, "入口文档缺 /login"
+    checks += 4
+
+    # 63) R18 秒级登录门禁
+    for tok in ("def login_gate_for_url", "def fast_login_gate", "def cmd_auth", "p_auth = sub.add_parser(\"auth\"", "/login?drive="):
+        assert tok in skill_root.joinpath("scripts/pancli/engine.py").read_text(encoding="utf-8"), "engine 缺秒级门禁 %s" % tok
+    code_web = _PAN_WEB.read_text(encoding="utf-8")
+    for tok in ("fast_login_gate", "login_required", "serve_login_html(drive", "parse_qs(urlparse(self.path).query)"):
+        assert tok in code_web, "web 缺秒级门禁 %s" % tok
+    gate = pan.fast_login_gate("https://pan.baidu.com/s/abc", cfg)
+    assert gate["required"] is False and gate["blocking"] is False and gate["drive"] == "baidu", gate
+    assert gate["status"] == "web_session" and gate["login_url"] == "", gate
+    gate2 = pan.fast_login_gate("https://example.com/a.zip", cfg)
+    assert gate2["required"] is False and gate2["blocking"] is False, gate2
+    res_auth = pan._probe_link_checks(cfg, "https://pan.baidu.com/s/abc")
+    assert res_auth["login_required"] is False and res_auth["login_url"] == "", res_auth
+    assert any(c["name"] == "登录/授权" for c in res_auth["checks"]), res_auth["checks"]
+    ref35_text = ref35.read_text(encoding="utf-8")
+    assert "pan route" in ref35_text and "秒级提醒" in ref35_text, ref35_text
+    checks += 5
+
+    # 64) R19 零客户端引擎桥
+    for tok in ("ZERO_CLIENT_BRIDGES", "def zero_client_options", "def engine_catalog_payload", "def cmd_engines", "浏览器直链捕获桥"):
+        assert tok in (HERE.parent / "scripts/pancli/engine.py").read_text(encoding="utf-8"), "engine 缺零客户端桥 %s" % tok
+    code_web = _PAN_WEB.read_text(encoding="utf-8")
+    for tok in ("def serve_engines_html", "/engines", "/api/engines", "engine_catalog_payload", "浏览器直链桥"):
+        assert tok in code_web, "web 缺零客户端桥 %s" % tok
+    mcp_text = (HERE / "pan_mcp.py").read_text(encoding="utf-8")
+    for tok in ("pan_auth", "pan_engines"):
+        assert tok in mcp_text, "MCP 缺 %s" % tok
+    mf = json.loads((HERE.parent / "extensions/chrome/manifest.json").read_text(encoding="utf-8"))
+    assert "downloads" in mf.get("permissions", []), mf["permissions"]
+    bg = (HERE.parent / "extensions/chrome/background.js").read_text(encoding="utf-8")
+    for tok in ("chrome.downloads.onCreated", "captureDownloads", "confirm_auth", "login_required"):
+        assert tok in bg, "background 缺零客户端桥 %s" % tok
+    ref37 = skill_root / "references" / "37-零客户端引擎桥.md"
+    assert ref37.exists() and "浏览器直链捕获桥" in ref37.read_text(encoding="utf-8"), "references/37 缺失"
+    checks += 6
+
+    # v0.18.2: 真机验证权限清单 + 第三方依赖声明 + 版本一致
+    _root18 = HERE.parent
+    _notice = _root18 / "NOTICE.md"
+    assert _notice.is_file(), "缺少 NOTICE.md"
+    _ntext = _notice.read_text(encoding="utf-8")
+    assert "第三方依赖" in _ntext and "yt_dlp" in _ntext, "NOTICE 应声明第三方依赖"
+    _ref41 = _root18 / "references" / "41-真机验证权限清单.md"
+    assert _ref41.is_file(), "缺少 references/41 真机验证权限清单"
+    _r41 = _ref41.read_text(encoding="utf-8")
+    assert "待用户提供" in _r41 and "最小授权方式" in _r41, "references/41 应列最小授权方式与待提供状态"
+    _ref40 = _root18 / "references" / "40-网盘支持矩阵.md"
+    assert _ref40.is_file(), "缺少 references/40 支持矩阵"
+    _sk = (_root18 / "SKILL.md").read_text(encoding="utf-8")
+    _mf = json.loads((_root18 / "manifest.json").read_text(encoding="utf-8"))
+    assert '"0.18.2"' in _sk.split("---", 2)[1], "SKILL 版本应为 0.18.2"
+    assert _mf.get("version") == "0.18.2", _mf.get("version")
+    checks += 8
+
+    code45 = (HERE.parent / "scripts/pancli/engine.py").read_text(encoding="utf-8")
+    for tok in ("def route_link_payload", "def cmd_route", 'sub.add_parser("route"', "next_action", "latency_ms"):
+        assert tok in code45, "engine 缺一次路由 %s" % tok
+    code_web = _PAN_WEB.read_text(encoding="utf-8")
+    for tok in ("/api/route", "route_link_payload", "j.next_action", "j.latency_ms"):
+        assert tok in code_web, "web 缺一次路由 %s" % tok
+    mcp_text = (HERE / "pan_mcp.py").read_text(encoding="utf-8")
+    assert "pan_route" in mcp_text, "MCP 缺 pan_route"
+    routed = pan.route_link_payload(cfg, "https://pan.baidu.com/s/abc")
+    assert routed["next_action"] == "download" and routed["login_url"] == "" and routed["engine"] == "baiduweb", routed
+    assert routed["route"] == "zero_client" and isinstance(routed["latency_ms"], (int, float)), routed
+    checks += 4
+
+    # 66) R21 配置缓存 + 省 token 路由
+    for tok in ("_CONFIG_CACHE", "_config_stat_key", "def compact_route_payload", '--brief'):
+        assert tok in (HERE.parent / "scripts/pancli/engine.py").read_text(encoding="utf-8"), "engine 缺省 token 路由 %s" % tok
+    b = json.loads(json.dumps(cfg))
+    b["download_root"] = str(TMP / "token-root")
+    cache_path = TMP / "config-cache.json"
+    cache_path.write_text(json.dumps(b), encoding="utf-8")
+    first = pan.load_config(cache_path)
+    assert first["download_root"] == str(TMP / "token-root"), first["download_root"]
+    stat_key = pan._config_stat_key(cache_path)
+    assert pan._CONFIG_CACHE["key"] == stat_key
+    second = pan.load_config(cache_path)
+    assert second["download_root"] == str(TMP / "token-root")
+    assert first is not second, "配置缓存不能返回同一个可变对象"
+    checks += 4
+
+    # 67) R22 路由短缓存 + 诊断缓存
+    r1 = pan.route_link_payload(cfg, "https://pan.baidu.com/s/cache-test")
+    r2 = pan.route_link_payload(cfg, "https://pan.baidu.com/s/cache-test")
+    r3 = pan.route_link_payload(cfg, "https://pan.baidu.com/s/cache-test", cache=False)
+    assert r1["cache_hit"] is False and r2["cache_hit"] is True and r3["cache_hit"] is False, (r1["cache_hit"], r2["cache_hit"], r3["cache_hit"])
+    assert r2["login_url"] == r1["login_url"] and r2["next_action"] == "download", r2
+    code45 = (HERE.parent / "scripts/pancli/engine.py").read_text(encoding="utf-8")
+    for tok in ("_ROUTE_CACHE", "_ROUTE_CACHE_TTL", "--no-cache", "def _route_cache_key"):
+        assert tok in code45, "engine 缺路由缓存 %s" % tok
+    code_web = _PAN_WEB.read_text(encoding="utf-8")
+    for tok in ("_DIAG_CACHE", "_DIAG_CACHE_TTL", "diagnostics_payload(force=", "cache_ttl_seconds"):
+        assert tok in code_web, "web 缺诊断缓存 %s" % tok
+    checks += 4
+
+    # 68) v0.15.0 百度官方网页会话桥 + 通用网页引擎核心行为
+    from pancli import baidu_web as _baidu_web
+    from pancli import web as _panweb
+    from pancli import webengine as _webengine
+
+    for src in (_PAN_WEB.parent / "webengine.py", _PAN_WEB.parent / "baidu_web.py"):
+        compile(src.read_text(encoding="utf-8"), str(src), "exec")
+    assert pan.build_plan("https://pan.baidu.com/s/1abc?pwd=3379", cfg=cfg)["engine"] == "baiduweb"
+    assert "setInterval(loadTasks,10000)" in _PAN_WEB.read_text(encoding="utf-8")
+    assert _panweb._redact_task_url("https://pan.baidu.com/s/1abc?pwd=3379") == "https://pan.baidu.com/s/1abc?pwd=***"
+    assert _baidu_web._api_error(-20, "验证码").code == "captcha_required"
+    assert _baidu_web._api_error(118, "违规操作").code == "platform_denied"
+    checks += 6
+
+    fake_root = TMP / "webengine-folder"
+    fake_root.mkdir(parents=True, exist_ok=True)
+    (fake_root / "资源").mkdir(parents=True, exist_ok=True)
+    (fake_root / "资源" / "done.zip").write_bytes(b"0123456789")
+
+    class FakeDriver:
+        def __init__(self, _cfg, target_root):
+            self.target_root = target_root
+
+        def probe(self, url, pwd=""):
+            return _webengine.WebProbe(
+                driver="fake", url=url, title="folder", password_required=False,
+                total_files=3, total_bytes=20,
+            )
+
+        def list_tasks(self, probe):
+            return [
+                {"name": "done.zip", "rel_path": "资源/done.zip", "size": 10, "remote_id": "1"},
+                {"name": "ok.zip", "rel_path": "资源/ok.zip", "size": 10, "remote_id": "2"},
+                {"name": "bad.zip", "rel_path": "资源/bad.zip", "size": 0, "remote_id": "3"},
+            ]
+
+        def resolve_download_url(self, probe, task, index=1):
+            if task.get("remote_id") == "3":
+                raise _webengine.WebEngineError("captcha_required", "百度要求验证码")
+            return "https://example.com/" + task["name"]
+
+        def download(self, direct_url, dest, progress=None, task_control=None):
+            target = Path(dest)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"abcdef0123")
+            return {"ok": True, "bytes": target.stat().st_size}
+
+    original_driver = _webengine._driver_class
+    _webengine._driver_class = lambda _driver: FakeDriver
+    try:
+        plan = _webengine.build_web_plan("https://example.com/folder", pwd="3379", target=str(fake_root), driver="fake")
+        rc, results = _webengine.execute_web_plan(plan)
+    finally:
+        _webengine._driver_class = original_driver
+    assert rc == 1, rc
+    assert len(results) == 3 and sum(r.get("rc") == 0 for r in results) == 2
+    assert results[0].get("resumed") is True
+    assert results[1].get("bytes") == 10
+    assert results[2].get("error_code") == "captcha_required"
+    assert (fake_root / "资源" / "ok.zip").stat().st_size == 10
+    assert (fake_root / "资源" / "ok.zip.part").exists() is False
+    checks += 7
+
+    # 69) 百度未登录/直链缺失：报告必须给 login_required + remediation，且不泄漏提取码
+    from datetime import datetime as _dt
+    from pancli import report as _rep
+    from pancli import baidu_login as _bl
+    _auth = [{"rc": 1, "error_code": "dlink_missing"}, {"rc": 1, "error_code": "auth_required"}]
+    assert _rep.report_login_required(_auth) is True
+    assert _rep.report_login_required([{"rc": 0}]) is False
+    _hint = _rep.report_remediation(_auth)
+    assert "login baidu --qr" in _hint and "baidupcs" in _hint, _hint
+    assert _hint == _rep.report_remediation(_auth), "remediation 必须稳定"
+    _rp = TMP / "baidu-report"; _rp.mkdir(parents=True, exist_ok=True)
+    _cfg2 = json.loads(json.dumps(cfg)); _cfg2["http"] = dict(_cfg2.get("http") or {}, report_dir=str(_rp))
+    _path = _rep.write_download_report(_cfg2, {"target": str(_rp), "drive": "baidu", "engine": "baiduweb"},
+                                      _auth, _dt.now(), _dt.now(), ok=False,
+                                      url="https://pan.baidu.com/s/x?pwd=3379")
+    _repj = json.loads(Path(_path).read_text(encoding="utf-8"))
+    assert _repj["login_required"] is True and "login baidu --qr" in _repj["remediation"], _repj
+    assert "3379" not in json.dumps(_repj), "报告泄漏提取码"
+    assert hasattr(_bl, "run") and hasattr(_bl, "poll_confirm") and hasattr(_bl, "fetch_credentials")
+    assert _bl.unique_qr_path(str(TMP / "qr.png")) != _bl.unique_qr_path(str(TMP / "qr.png")), "登录二维码路径必须唯一"
+    _eng_txt = (HERE.parent / "scripts/pancli/engine.py").read_text(encoding="utf-8")
+    assert "--qr" in _eng_txt and "_login_baidu_qr" in _eng_txt, "CLI 缺 pan login --qr"
+    checks += 9
+
+    # 70) v0.16.0：单实例锁 / 续传安全（禁 --ow）/ 双 fork 守护化 / 限速与 ETA
+    from pancli import tasklock as _tlk
+    from pancli import guard as _grd
+
+    _lk_a = _tlk.TaskLock("baidu", "/我的资源/A249", str(TMP / "lockout"))
+    assert _lk_a.acquire() is True
+    _lk_b = _tlk.TaskLock("baidu", "/我的资源/A249", str(TMP / "lockout"))
+    assert _lk_b.acquire() is False, "同来源第二次加锁必须被拒绝"
+    _gate = _tlk.acquire_for_step({"lock": {"drive": "baidu", "source": "/我的资源/A249", "target": str(TMP / "lockout")}})
+    assert _gate["ok"] is False and "单实例" in _gate["message"], _gate
+    _lk_a.release()
+    assert _tlk.TaskLock("baidu", "/我的资源/A249", str(TMP / "lockout")).acquire() is True
+    checks += 4
+
+    _stale_path = _tlk.lock_dir() / "stalecheck.lock"
+    _stale_path.write_text(json.dumps({"pid": 999999, "key": "stalecheck"}), encoding="utf-8")
+    assert "stalecheck" in _tlk.cleanup_stale(), "陈旧锁必须能被自动清理"
+    checks += 1
+
+    _pl = pan.build_plan("https://pan.baidu.com/s/x", pwd="1", to=str(TMP / "planout"), engine="baidupcs")
+    _dl = [s for s in _pl["steps"] if s.get("lock")]
+    assert _dl, "百度下载步骤缺单实例锁"
+    _webpl = pan.build_plan("https://pan.baidu.com/s/x", pwd="1", to=str(TMP / "webplan"), engine="baiduweb")
+    assert _webpl.get("web") and _webpl.get("web_lock"), "百度官方网页路径也必须挂单实例锁"
+    _argv = _dl[0]["argv"]
+    assert "--retry" in _argv, _argv
+    assert "--ow" not in _argv, _argv
+    checks += 3
+
+    _cfg_ow = {"drives": {"baidu": {"engine_command": "BaiduPCS-Go download /我的资源/x --saveto {dir} --ow"}}}
+    _plan_ow = pan.build_plan("https://pan.baidu.com/s/x", pwd="1", to=str(TMP / "owout"), engine="baidupcs", cfg=_cfg_ow)
+    _argv_ow = _plan_ow["steps"][0]["argv"]
+    assert "--ow" not in _argv_ow and "--retry" in _argv_ow, "自定义命令里的 --ow 必须被自动剥离：%s" % _argv_ow
+    checks += 1
+
+    assert _grd.classify_error("官方直链返回 HTTP 403")["code"] == "http_403"
+    assert _grd.classify_error("未登录")["code"] == "login_required"
+    assert _grd.classify_error("百度官方接口未返回下载直链")["code"] == "dlink_missing"
+    checks += 3
+
+    assert _grd.human_eta(_grd.eta_for(10 * 1024 * 1024, 1024 * 1024)) == "10秒"
+    assert "限速" in _grd.throttle_hint(60 * 1024, "baidu")
+    assert "未触发限速" in _grd.throttle_hint(5 * 1024 * 1024, "baidu")
+    checks += 3
+
+    import subprocess as _sp
+    _dpid_file = TMP / "daemon-child.pid"
+    _script = TMP / "daemon-child.py"
+    _script.write_text(
+        "import os,sys,time\nsys.path.insert(0,%r)\nfrom pancli.guard import daemonize\ndaemonize()\n"
+        "open(%r,'w').write(str(os.getpid()))\ntime.sleep(25)\n" % (str(HERE.parent / "scripts"), str(_dpid_file)),
+        encoding="utf-8")
+    _sp.run([sys.executable, str(_script)], check=True, timeout=20)
+    _dl_pid = int(_dpid_file.read_text().strip())
+    assert _dl_pid != os.getpid()
+    assert _tlk.pid_alive(_dl_pid), "双 fork 守护化进程应存活"
+    try:
+        os.kill(_dl_pid, 9)
+    except Exception:
+        pass
+    checks += 1
+
+    # 90) 网盘通 100% 优化：10 秒刷新 + 下载请求快速响应（配置只读一次 / 批量异步派发 / 受理回执）
+    _web_src = _PAN_WEB.read_text(encoding="utf-8")
+    assert "setInterval(loadTasks,10000)" in _web_src, "任务中心应每 10 秒刷新一次"
+    assert "}, 10000);" in _web_src, "实时页应每 10 秒刷新一次"
+    assert "2000)" not in _web_src, "不应残留 2 秒刷新"
+    for tok in ("cfg_once", "dispatch_ms", "accepted_at", '"accepted"', '"queued"', "async_dispatch",
+                "_dispatch_batch", "已受理"):
+        assert tok in _web_src, "web.py 缺快速响应要素 %s" % tok
+    # 单链接同步派发（保住 PID 语义），多链接后台线程派发（响应时间与链接数解耦）
+    _post = _web_src[_web_src.index('self.path.startswith("/api/download")'):]
+    _post = _post[:_post.index("/api/settings")]
+    assert "if len(queued) == 1:" in _post and "threading.Thread(target=_dispatch_batch" in _post, "派发策略缺失"
+    assert _post.index("load_config()") < _post.index("for url in urls[:100]:"), "配置必须在循环外只读一次"
+    # 门禁是纯本机检查：不得在接收链接时发起网络请求
+    assert "urlopen" not in _post and "requests." not in _post, "接收链接阶段不得联网"
+    # 首页必须给出「已受理」即时回执并带耗时
+    _home_src = pan.serve_home_html([])
+    assert "已受理" in _home_src and "dispatch_ms" in _home_src, "首页缺少即时受理回执"
+    assert "setInterval(submitUrls,120)" in _home_src or "setTimeout(submitUrls,120)" in _home_src, "输入防抖未提速"
+    assert "setTimeout(submitUrls,0)" in _home_src, "粘贴后应立刻投递"
+    checks += 12
 
     print("SELF_TEST_OK checks=%d tmp=%s" % (checks, TMP))
 
