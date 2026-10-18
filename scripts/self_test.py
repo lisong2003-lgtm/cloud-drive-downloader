@@ -1202,7 +1202,7 @@ def main():
     assert ref37.exists() and "浏览器直链捕获桥" in ref37.read_text(encoding="utf-8"), "references/37 缺失"
     checks += 6
 
-    # v0.18.2: 真机验证权限清单 + 第三方依赖声明 + 版本一致
+    # v0.18.3: 真机验证权限清单 + 第三方依赖声明 + 版本一致
     _root18 = HERE.parent
     _notice = _root18 / "NOTICE.md"
     assert _notice.is_file(), "缺少 NOTICE.md"
@@ -1216,9 +1216,20 @@ def main():
     assert _ref40.is_file(), "缺少 references/40 支持矩阵"
     _sk = (_root18 / "SKILL.md").read_text(encoding="utf-8")
     _mf = json.loads((_root18 / "manifest.json").read_text(encoding="utf-8"))
-    assert '"0.18.2"' in _sk.split("---", 2)[1], "SKILL 版本应为 0.18.2"
-    assert _mf.get("version") == "0.18.2", _mf.get("version")
+    assert '"0.18.3"' in _sk.split("---", 2)[1], "SKILL 版本应为 0.18.3"
+    assert _mf.get("version") == "0.18.3", _mf.get("version")
     checks += 8
+
+    # v0.18.3: /live 页注入风险修复（HTML 转义 + JSON safe embed + DOM textContent）
+    _web = _PAN_WEB.read_text(encoding="utf-8")
+    for tok in ("drive_name_html = _html.escape", "current_step_html = _html.escape",
+                "updated_html = _html.escape", "local_path_attr = _html.escape",
+                '_json_esc = items_json.replace("&", "\\\\u0026")',
+                "h.textContent = d.name", "div.appendChild(h); div.appendChild(canv); div.appendChild(meta)"):
+        assert tok in _web, "web /live 转义逻辑缺失 %s" % tok
+    _live_part = _web.split("def serve_live_json", 1)[1].split("def serve_engines_html", 1)[0]
+    assert "innerHTML" not in _live_part, "live 页面区块不应使用 innerHTML"
+    checks += 6
 
     code45 = (HERE.parent / "scripts/pancli/engine.py").read_text(encoding="utf-8")
     for tok in ("def route_link_payload", "def cmd_route", 'sub.add_parser("route"', "next_action", "latency_ms"):
