@@ -1426,22 +1426,24 @@ def main():
     assert "未触发限速" in _grd.throttle_hint(5 * 1024 * 1024, "baidu")
     checks += 3
 
-    import subprocess as _sp
-    _dpid_file = TMP / "daemon-child.pid"
-    _script = TMP / "daemon-child.py"
-    _script.write_text(
-        "import os,sys,time\nsys.path.insert(0,%r)\nfrom pancli.guard import daemonize\ndaemonize()\n"
-        "open(%r,'w').write(str(os.getpid()))\ntime.sleep(25)\n" % (str(HERE.parent / "scripts"), str(_dpid_file)),
-        encoding="utf-8")
-    _sp.run([sys.executable, str(_script)], check=True, timeout=20)
-    _dl_pid = int(_dpid_file.read_text().strip())
-    assert _dl_pid != os.getpid()
-    assert _tlk.pid_alive(_dl_pid), "双 fork 守护化进程应存活"
-    try:
-        os.kill(_dl_pid, 9)
-    except Exception:
-        pass
-    checks += 1
+    if os.name != "nt":
+        # os.fork 只存在于 POSIX；Windows 计划任务走 PowerShell/ps1，不测试双 fork 守护化
+        import subprocess as _sp
+        _dpid_file = TMP / "daemon-child.pid"
+        _script = TMP / "daemon-child.py"
+        _script.write_text(
+            "import os,sys,time\nsys.path.insert(0,%r)\nfrom pancli.guard import daemonize\ndaemonize()\n"
+            "open(%r,'w').write(str(os.getpid()))\ntime.sleep(25)\n" % (str(HERE.parent / "scripts"), str(_dpid_file)),
+            encoding="utf-8")
+        _sp.run([sys.executable, str(_script)], check=True, timeout=20)
+        _dl_pid = int(_dpid_file.read_text().strip())
+        assert _dl_pid != os.getpid()
+        assert _tlk.pid_alive(_dl_pid), "双 fork 守护化进程应存活"
+        try:
+            os.kill(_dl_pid, 9)
+        except Exception:
+            pass
+        checks += 1
 
     # 90) 网盘通 100% 优化：10 秒刷新 + 下载请求快速响应（配置只读一次 / 批量异步派发 / 受理回执）
     _web_src = _PAN_WEB.read_text(encoding="utf-8")
