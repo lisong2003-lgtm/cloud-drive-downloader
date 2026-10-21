@@ -359,9 +359,10 @@ def main():
         env={"APPDATA": "/tmp/AppData/Roaming", "LOCALAPPDATA": "/tmp/AppData/Local", "HOME": "/tmp/home"},
         home="/tmp/home",
     )
-    assert str(win_paths["config"]).endswith("pan-downloader/config.json"), win_paths
-    assert str(win_paths["log"]).endswith("pan-downloader/logs/pan-downloader.log"), win_paths
-    assert str(win_paths["download"]).endswith("Downloads/网盘下载"), win_paths
+    win_str = {k: str(v).replace("\\", "/") for k, v in win_paths.items()}
+    assert win_str["config"].endswith("pan-downloader/config.json"), win_paths
+    assert win_str["log"].endswith("pan-downloader/logs/pan-downloader.log"), win_paths
+    assert win_str["download"].endswith("Downloads/网盘下载"), win_paths
     assert (pan.SKILL_DIR / "scripts/pan.cmd").is_file(), "缺少 Windows CMD 包装器"
     assert (pan.SKILL_DIR / "scripts/pan.ps1").is_file(), "缺少 Windows PowerShell 包装器"
     checks += 5
