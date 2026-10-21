@@ -817,7 +817,10 @@ def main():
     assert "extract_urls" in clip_txt and "/api/download" in clip_txt and "pbpaste" in clip_txt, "剪贴板监听内容异常"
     assert "_URL_RE" in clip_txt, "clipboard_monitor 缺正则"
     web = HERE.parent / "scripts" / "pan_web.sh"
-    assert web.exists() and web.stat().st_mode & 0o111, "pan_web.sh 缺失/不可执行"
+    if os.name == "nt":
+        assert web.exists(), "pan_web.sh 缺失"
+    else:
+        assert web.exists() and web.stat().st_mode & 0o111, "pan_web.sh 缺失/不可执行"
     web_txt = web.read_text(encoding="utf-8")
     assert "clipboard_monitor" in web_txt and "serve" in web_txt and "open" in web_txt, "pan_web.sh 内容异常"
     # Windows 一键脚本与小白指南
