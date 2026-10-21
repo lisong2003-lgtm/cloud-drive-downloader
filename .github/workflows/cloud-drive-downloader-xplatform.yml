@@ -25,6 +25,7 @@ jobs:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: "1"
     steps:
+      - uses: actions/checkout@v4
       - name: self_test --json-only (488 checks)
         run: python scripts/self_test.py --json-only
 
