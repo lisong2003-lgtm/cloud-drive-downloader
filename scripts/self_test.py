@@ -289,7 +289,11 @@ def main():
     path = pan.save_config(cfg2, TMP / "saved.json")
     assert path.exists() and json.loads(path.read_text(encoding="utf-8"))["drives"]["quark"]["engine_command"]
     mode = stat.S_IMODE(path.stat().st_mode)
-    assert mode == 0o600, oct(mode)
+    if os.name == "nt":
+        # Windows 不支持 POSIX 权限位，chmod(0o600) 实际为 0o666
+        assert mode in (0o600, 0o666), oct(mode)
+    else:
+        assert mode == 0o600, oct(mode)
     checks += 2
 
     # 12) dry-run 缺依赖也完整展示计划，不提前返回
