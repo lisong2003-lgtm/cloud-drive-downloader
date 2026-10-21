@@ -1,6 +1,6 @@
 # Cloud Drive Unified Download Orchestrator
 
-> cloud-drive-downloader (cloud-drive-downloader) v0.18.3 · overseas-friendly lightweight layer. 中文版见 [README.md](README.md).
+> cloud-drive-downloader (cloud-drive-downloader) v0.18.9 · overseas-friendly lightweight layer. 中文版见 [README.md](README.md).
 
 ## What it is
 A unified download scheduler with Agent/MCP/CLI, Web UI and browser-plugin entry points. It routes share links through official web sessions or official APIs, prefers browser-captured direct links, and never cracks login/pay/rate-limit/anti-bot/DRM.

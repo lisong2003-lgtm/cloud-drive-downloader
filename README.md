@@ -34,7 +34,7 @@
 - 错误先用 `python3 scripts/pan.py guard error --text '<原始错误>'` 归类，再按返回的 `remediation` 处理。
 
 
-## 支持边界（v0.18.3）
+## 支持边界（v0.18.9）
 
 - 非百度路由：浏览器直链捕获桥通用于所有官方网页登录；AList 驱动桥覆盖绝大多数已登记盘（阿里/夸克/天翼/迅雷/115/123/移动/联通/UC/PikPak/OneDrive/Google/Dropbox/微云/蓝奏等）；OAuth/WebDAV 桥覆盖官方开放平台与 WebDAV 盘（坚果云等）。
 - 明确“不支持/需接入”的盘名与判定规则见 `references/40-网盘支持矩阵.md`；未接入盘不得当作 HTTP 直链抓取分享页，必须标“不支持/需接入”。

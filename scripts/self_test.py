@@ -213,7 +213,7 @@ def main():
     if p_bt["missing"]:
         assert "aria2c" in p_bt["missing"], p_bt["missing"]
     else:
-        assert os.path.basename(p_bt["steps"][0]["argv"][0]) == "aria2c", p_bt["steps"][0]["argv"]
+        assert os.path.basename(p_bt["steps"][0]["argv"][0]).lower().rstrip(".exe") == "aria2c", p_bt["steps"][0]["argv"]
     assert "--enable-dht=true" in p_bt["steps"][0]["argv"], p_bt["steps"][0]["argv"]
     p_torrent = pan.build_plan("https://example.com/a.torrent", cfg=cfg)
     assert p_torrent["drive"] == "bittorrent" and p_torrent["engine"] == "aria2", p_torrent
@@ -1225,8 +1225,8 @@ def main():
     assert _ref40.is_file(), "缺少 references/40 支持矩阵"
     _sk = (_root18 / "SKILL.md").read_text(encoding="utf-8")
     _mf = json.loads((_root18 / "manifest.json").read_text(encoding="utf-8"))
-    assert '"0.18.3"' in _sk.split("---", 2)[1], "SKILL 版本应为 0.18.3"
-    assert _mf.get("version") == "0.18.3", _mf.get("version")
+    assert '"0.18.9"' in _sk.split("---", 2)[1], "SKILL 版本应为 0.18.9"
+    assert _mf.get("version") == "0.18.9", _mf.get("version")
     checks += 8
 
     # v0.18.3: /live 页注入风险修复（HTML 转义 + JSON safe embed + DOM textContent）
