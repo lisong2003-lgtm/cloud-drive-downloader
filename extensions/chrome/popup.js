@@ -5,6 +5,11 @@ const $ = (id) => document.getElementById(id);
 async function main() {
   const d = await chrome.storage.local.get("serverUrl");
   $("serverUrl").value = d.serverUrl || "http://127.0.0.1:17890";
+  const capState = await chrome.storage.local.get({ captureDownloads: true });
+  $("captureDownloads").checked = capState.captureDownloads;
+  $("captureDownloads").addEventListener("change", async () => {
+    await chrome.storage.local.set({ captureDownloads: $("captureDownloads").checked });
+  });
   $("saveServer").addEventListener("click", async () => {
     const serverUrl = $("serverUrl").value.trim().replace(/\/$/, "");
     await chrome.storage.local.set({ serverUrl });

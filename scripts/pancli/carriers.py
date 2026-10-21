@@ -3,9 +3,23 @@
 """pan-downloader — 下载载具 / 任务控制 / 目录 / 通知 / 直链 / 转存子模块。"""
 from __future__ import annotations
 
+try:
+    import os as _boot_os, sys as _boot_sys
+    _boot_here = _boot_os.path.dirname(_boot_os.path.abspath(__file__))
+    _boot_parent = _boot_os.path.dirname(_boot_here)
+    for _boot_dir in (_boot_here, _boot_parent):
+        if _boot_dir not in _boot_sys.path:
+            _boot_sys.path.insert(0, _boot_dir)
+    import pyboot as _boot_pyboot
+    _boot_pyboot.ensure_utf8_io()
+except Exception:
+    pass
+
+
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime
@@ -251,6 +265,25 @@ def cmd_get(args):
             run_plan(plan, timeout=cfg.get("http", {}).get("timeout", 0), dry_run=True)
             print("DRY-RUN 完成：未执行实际下载（去掉 --dry-run 执行）")
         return 0
+    http_cfg = cfg.get("http") or {}
+    auto_web = (
+        not getattr(args, "no_web", False)
+        and not getattr(args, "json", False)
+        and not getattr(args, "events", False)
+        and sys.stdout.isatty()
+        and bool(http_cfg.get("auto_web", True))
+    )
+    web_info = None
+    if auto_web:
+        try:
+            from pancli.web import ensure_web_ui as _ensure_web_ui
+            web_info = _ensure_web_ui(cfg, open_browser=True)
+        except Exception as exc:
+            web_info = {"ok": False, "error": str(exc)}
+        if web_info.get("ok"):
+            print("实时状态：%s/live（下载位置可在页面复制）" % web_info.get("url", ""))
+        else:
+            print("⚠️ Web UI 未启动，下载继续：%s" % (web_info.get("error") or "未知原因"))
     Path(plan["target"]).mkdir(parents=True, exist_ok=True)
     log_line("TASK drive=%s engine=%s tier=%s target=%s url=%s" % (plan["drive"], plan["engine"], plan["tier"], plan["target"], args.url))
     from pancli.report import TaskControl as _TaskControl
@@ -260,7 +293,7 @@ def cmd_get(args):
         "pwd": args.pwd or "",
     })
     tc.register()
-    wish_live = bool(getattr(args, "live", False)) or bool((cfg.get("http") or {}).get("live_status", False))
+    wish_live = bool(getattr(args, "live", False)) or bool(http_cfg.get("live_status", False)) or bool(auto_web)
     live = None
     if wish_live:
         try:
@@ -303,10 +336,14 @@ def cmd_get(args):
         emit_events = bool(getattr(args, "events", False))
         rc, results = run_plan_detailed(plan, timeout=cfg.get("http", {}).get("timeout", 0), dry_run=False, emit_events=emit_events, live=live, task_control=tc)
         finished = datetime.now()
-        from pancli.report import write_download_report as _wdr
+        from pancli.report import write_download_report as _wdr, report_remediation as _rr
         report_path = _wdr(cfg, plan, results, started, finished, ok=(rc == 0), url=args.url)
         if report_path:
             print("报告：%s" % report_path)
+        if rc != 0:
+            _hint = _rr(results)
+            if _hint:
+                print("⚠️ 需要处理：%s" % _hint)
         if rc == 0:
             print("✅ 下载完成：%s" % plan["target"])
             from pancli.report import run_completion_hook as _rch
@@ -324,12 +361,8 @@ def _task_reports_dir(args=None):
     cfg = load_config()
     if getattr(args, "reports_dir", None):
         return os.path.expanduser(args.reports_dir)
-    http = cfg.get("http") or {}
-    if http.get("live_dir"):
-        return str(Path(http["live_dir"]).expanduser())
-    if http.get("report_dir"):
-        return str(Path(http["report_dir"]).expanduser())
-    return str(default_root(cfg))
+    from pancli.report import web_state_root as _web_state_root
+    return str(_web_state_root(cfg))
 
 
 def cmd_task(args):

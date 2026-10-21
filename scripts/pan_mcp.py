@@ -4,6 +4,9 @@
 
 暴露给 Agent 的工具：
   - pan_doctor    : 环境检查（JSON）
+  - pan_route     : 一次链接路由与预检（JSON）
+  - pan_auth      : 秒级登录/授权检查（JSON）
+  - pan_engines   : 零客户端引擎桥目录（JSON）
   - pan_detect    : 识别网盘（JSON）
   - pan_dirs      : 默认下载目录（JSON）
   - pan_get_plan  : 生成 dry-run 下载计划（JSON，不打码省略凭据）
@@ -16,6 +19,19 @@
 协议遵循 MCP stdio JSON-RPC：initialize / notifications/initialized / tools/list / tools/call / ping。
 """
 from __future__ import annotations
+
+try:
+    import os as _boot_os, sys as _boot_sys
+    _boot_here = _boot_os.path.dirname(_boot_os.path.abspath(__file__))
+    _boot_parent = _boot_os.path.dirname(_boot_here)
+    for _boot_dir in (_boot_here, _boot_parent):
+        if _boot_dir not in _boot_sys.path:
+            _boot_sys.path.insert(0, _boot_dir)
+    import pyboot as _boot_pyboot
+    _boot_pyboot.ensure_utf8_io()
+except Exception:
+    pass
+
 
 import json
 import os
@@ -86,6 +102,18 @@ TOOLS: Dict[str, Dict[str, Any]] = {
             "required": ["url"],
         },
     },
+    "pan_route": {
+        "description": "链接一次路由：识别、登录门禁、预检、零客户端桥和下一步动作；纯本地，不联网。默认返回省 token 的简要 JSON。",
+        "inputSchema": {"type":"object","properties":{"url":{"type":"string"},"pwd":{"type":"string"},"path":{"type":"string"},"tier":{"type":"string","enum":["free","vip","auto"]},"brief":{"type":"boolean","default":True}},"required":["url"]},
+    },
+    "pan_auth": {
+        "description": "收到链接后立即做纯本地登录/授权检查；返回 login_required、blocking 和统一登录页。",
+        "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+    },
+    "pan_engines": {
+        "description": "查看零客户端引擎桥、适用范围和本地兼容回退；可选传 url。",
+        "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}},
+    },
     "pan_test": {
         "description": "测试一条下载链接是否就绪（只读，不下载）：识别网盘、检查依赖/提码、目标目录可写性，返回 JSON。",
         "inputSchema": {
@@ -126,6 +154,24 @@ def call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     args = arguments or {}
     if name == "pan_doctor":
         text, is_err = run_cli(["doctor", "--json"])
+    elif name == "pan_route":
+        cmd = ["route", str(args.get("url", "")), "--json"]
+        if args.get("pwd"):
+            cmd += ["--pwd", str(args["pwd"])]
+        if args.get("path"):
+            cmd += ["--path", str(args["path"])]
+        if args.get("tier"):
+            cmd += ["--tier", str(args["tier"])]
+        if args.get("brief", True):
+            cmd += ["--brief"]
+        text, is_err = run_cli(cmd)
+    elif name == "pan_auth":
+        text, is_err = run_cli(["auth", str(args.get("url", "")), "--json"])
+    elif name == "pan_engines":
+        cmd = ["engines", "--json"]
+        if args.get("url"):
+            cmd = ["engines", str(args.get("url")), "--json"]
+        text, is_err = run_cli(cmd)
     elif name == "pan_detect":
         text, is_err = run_cli(["detect", str(args.get("url", ""))])
     elif name == "pan_dirs":

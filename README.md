@@ -1,4 +1,6 @@
 # 网盘通（cloud-drive-downloader）
+**[English](./README.en.md) | [中文](./README.md)**
+
 
 通用下载调度层。用户链接可从 Agent / MCP / CLI、Web UI 或浏览器插件进入 pan 调度层，再交由本机、NAS Docker、服务器 Docker 或远程引擎执行。
 支持 macOS / Windows / Linux；默认本机 Agent / CLI 下载，NAS 不是前置条件。

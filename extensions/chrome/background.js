@@ -30,6 +30,8 @@ function pickUrl(text) {
 
 async function sendToPan(url, opts) {
   const body = { url: (url || "").trim() };
+  if (opts.confirm_auth) body.confirm_auth = true;
+  if (opts.source) body.source = opts.source;
   if (opts.pwd) body.pwd = opts.pwd;
   if (opts.to) body.to = opts.to;
   if (opts.engine) body.engine = opts.engine;
@@ -64,9 +66,30 @@ async function downloadFromText(text) {
   }
   const opts = await loadDefaults();
   const data = await sendToPan(url, opts);
+  if (!data.ok && data.login_required && data.login_url) {
+    const target = new URL(data.login_url, await getBase()).toString();
+    chrome.tabs.create({ url: target });
+    notify("需要登录/授权", "已打开网盘通统一登录页");
+    return data;
+  }
   notify("pan 下载", data.ok ? "已开始：" + url : "失败：" + (data.error || "未知错误"));
   return data;
 }
+
+const recentCaptures = new Set();
+
+chrome.downloads.onCreated.addListener(async (item) => {
+  if (!item || !/^https?:\/\//i.test(item.url || "")) return;
+  const state = await chrome.storage.local.get({ captureDownloads: true });
+  if (!state.captureDownloads) return;
+  const key = (item.url || "").split("#")[0];
+  if (recentCaptures.has(key)) return;
+  recentCaptures.add(key);
+  setTimeout(() => recentCaptures.delete(key), 10 * 60 * 1000);
+  const opts = await loadDefaults();
+  const data = await sendToPan(item.url, { ...opts, confirm_auth: true, source: "browser-capture" });
+  notify(data.ok ? "零客户端桥已接管" : "零客户端桥捕获失败", data.ok ? item.url : (data.error || "未知错误"));
+});
 
 chrome.contextMenus.onClicked.addListener(async (info) => {
   const text = info.linkUrl || info.selectionText || (info.menuItemId === MENU_ID ? (info.pageUrl || "") : "");

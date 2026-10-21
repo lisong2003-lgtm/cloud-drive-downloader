@@ -1,4 +1,17 @@
 """网盘通 搜索/爬虫/电影/X 子模块（从 engine.py 拆分，高风险实验区，命令由 engine 懒加载）。"""
+
+try:
+    import os as _boot_os, sys as _boot_sys
+    _boot_here = _boot_os.path.dirname(_boot_os.path.abspath(__file__))
+    _boot_parent = _boot_os.path.dirname(_boot_here)
+    for _boot_dir in (_boot_here, _boot_parent):
+        if _boot_dir not in _boot_sys.path:
+            _boot_sys.path.insert(0, _boot_dir)
+    import pyboot as _boot_pyboot
+    _boot_pyboot.ensure_utf8_io()
+except Exception:
+    pass
+
 from pancli.engine import *  # noqa: F401,F403
 
 def _cmd_get(args):

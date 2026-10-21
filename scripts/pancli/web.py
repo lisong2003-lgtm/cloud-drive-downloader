@@ -1,5 +1,18 @@
 """网盘通 Web/Agent 一站式服务子模块（从 engine.py 拆分，命令入口由 engine 懒加载）。"""
 # 自动继承 engine 的全部共享工具（SKILL_DIR、配置、日志、下载调度等）
+
+try:
+    import os as _boot_os, sys as _boot_sys
+    _boot_here = _boot_os.path.dirname(_boot_os.path.abspath(__file__))
+    _boot_parent = _boot_os.path.dirname(_boot_here)
+    for _boot_dir in (_boot_here, _boot_parent):
+        if _boot_dir not in _boot_sys.path:
+            _boot_sys.path.insert(0, _boot_dir)
+    import pyboot as _boot_pyboot
+    _boot_pyboot.ensure_utf8_io()
+except Exception:
+    pass
+
 from pancli.engine import *  # noqa: F401,F403
 from pancli.engine import _probe_link_checks, fast_login_gate, login_gate_for_url, engine_catalog_payload, route_link_payload, _config_stat_key, CONFIG_PATH  # noqa: F401
 from pancli.report import _atomic_write_json, LIVE_FILE_NAME, TASK_FILE_NAME, read_task_records, web_state_root  # noqa: F401

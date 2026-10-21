@@ -10,8 +10,22 @@
 """
 from __future__ import annotations
 
+try:
+    import os as _boot_os, sys as _boot_sys
+    _boot_here = _boot_os.path.dirname(_boot_os.path.abspath(__file__))
+    _boot_parent = _boot_os.path.dirname(_boot_here)
+    for _boot_dir in (_boot_here, _boot_parent):
+        if _boot_dir not in _boot_sys.path:
+            _boot_sys.path.insert(0, _boot_dir)
+    import pyboot as _boot_pyboot
+    _boot_pyboot.ensure_utf8_io()
+except Exception:
+    pass
+
+
 import argparse, json, os, subprocess, sys, tempfile, threading
 from pathlib import Path
+from functools import partial
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,7 +67,8 @@ def check_range_split(split_url=""):
     (srv / "test.bin").write_bytes(payload)
     url = split_url or ""
     if not url:
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), SimpleHTTPRequestHandler)
+        handler = partial(SimpleHTTPRequestHandler, directory=str(srv))
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         port = httpd.server_address[1]
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         url = "http://127.0.0.1:%d/test.bin" % port
@@ -69,7 +84,7 @@ def check_range_split(split_url=""):
         stop()
     dst = out / "test.bin"
     if p.returncode == 0 and dst.exists() and dst.stat().st_size == len(payload):
-        rep = reports / "下载报告.json"
+        rep = next(reports.glob("**/下载报告.json"), reports / "下载报告.json")
         return PASS, "分片下载成功 size=%d report=%s" % (len(payload), rep.exists())
     return FAIL, (p.stdout + "\n" + p.stderr)[:600]
 

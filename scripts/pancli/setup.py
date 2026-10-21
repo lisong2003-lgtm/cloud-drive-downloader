@@ -3,6 +3,19 @@
 """pan-downloader — 环境/依赖/向导（doctor、setup、MCP 指引）子模块。"""
 from __future__ import annotations
 
+try:
+    import os as _boot_os, sys as _boot_sys
+    _boot_here = _boot_os.path.dirname(_boot_os.path.abspath(__file__))
+    _boot_parent = _boot_os.path.dirname(_boot_here)
+    for _boot_dir in (_boot_here, _boot_parent):
+        if _boot_dir not in _boot_sys.path:
+            _boot_sys.path.insert(0, _boot_dir)
+    import pyboot as _boot_pyboot
+    _boot_pyboot.ensure_utf8_io()
+except Exception:
+    pass
+
+
 import json
 import os
 import platform
@@ -316,6 +329,7 @@ def cmd_doctor(args):
         ("运行模式", _mode),
         ("python3", sys.version.split()[0]),
         ("系统", "%s / %s" % (platform.system() or "unknown", backend_names.get(backend, backend))),
+        ("零客户端桥", "浏览器直链捕获 / AList / OAuth / WebDAV"),
         ("curl", shutil.which("curl") or "缺失"),
         ("aria2c", find_engine_binary("aria2", cfg) or "未安装（可选）"),
         ("alist", find_engine_binary("alist", cfg) or "未安装（多数网盘挂载需要）"),

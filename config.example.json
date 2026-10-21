@@ -20,6 +20,7 @@
     "live_status": true,
     "live_interval": 1.0,
     "live_dir": "",
+    "auto_web": true,
     "schedule_at": ""
   },
   "ytdlp": {

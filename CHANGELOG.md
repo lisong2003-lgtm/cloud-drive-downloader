@@ -1,3 +1,10 @@
+# Changelog
+
+
+## 0.18.9 (2026-10-21)
+- 三平台对齐（cross-platform + i18n overseas）：README.en.md、`--lang en|zh` 主入口、i18n.py、CFI 三平台 workflow 全绿。
+- 不改变业务算法/中文模板；平台专用调整只改发布副本。
+
 ## 2026-10-18 v0.18.3（修复 /live 页注入风险 + 三平台重新对齐）
 
 - 修复 `/live` 实时页潜在 XSS：表格字段（网盘名/当前步骤/状态徽章/更新时间）统一 HTML 转义；内嵌曲线 JSON 改为 HTML-safe 转义（`&`→`\u0026`、`<`→`\u003c`、`>`→`\u003e`、U+2028/2029）；图表卡片由 `innerHTML` 改为 DOM + `textContent` 渲染，避免安全字段二次解析注入。

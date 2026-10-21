@@ -15,8 +15,24 @@ Ponytail full 设计原则：
 """
 from __future__ import annotations
 
+try:
+    import os as _boot_os, sys as _boot_sys
+    _boot_here = _boot_os.path.dirname(_boot_os.path.abspath(__file__))
+    _boot_parent = _boot_os.path.dirname(_boot_here)
+    for _boot_dir in (_boot_here, _boot_parent):
+        if _boot_dir not in _boot_sys.path:
+            _boot_sys.path.insert(0, _boot_dir)
+    import pyboot as _boot_pyboot
+    _boot_pyboot.ensure_utf8_io()
+except Exception:
+    pass
+
+
 import argparse
+
+import i18n
 import copy
+import hashlib
 import getpass
 import json
 import os
@@ -96,7 +112,7 @@ DRIVES = {
             "pan.baidu.com",
             "yun.baidu.com"
         ],
-        "engine": "baidupcs",
+        "engine": "baiduweb",
         "reference": "references/01-百度网盘.md"
     },
     "aliyun": {
@@ -438,6 +454,7 @@ DEFAULT_CONFIG = {
         "live_status": False,
         "live_interval": 1.0,
         "live_dir": "",
+        "auto_web": True,
         "schedule_at": ""
     },
     "ytdlp": {
@@ -771,15 +788,34 @@ def deep_merge(base, over):
     return out
 
 
+_CONFIG_CACHE = {"key": None, "cfg": {}}
+_ROUTE_CACHE = {}
+_ROUTE_CACHE_TTL = 2.0
+
+
+def _config_stat_key(path):
+    try:
+        st = path.stat()
+        return (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        return (str(path), -1, -1, -1)
+
+
 def load_config(path=None):
+    """读取配置；按 mtime/size/inode 缓存，避免高频路由重复读盘。"""
     path = Path(path or CONFIG_PATH)
+    key = _config_stat_key(path)
     if not path.exists():
         return copy.deepcopy(DEFAULT_CONFIG)
+    if _CONFIG_CACHE["key"] == key:
+        return copy.deepcopy(_CONFIG_CACHE["cfg"])
     try:
         user = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, OSError):
         return copy.deepcopy(DEFAULT_CONFIG)
-    return deep_merge(DEFAULT_CONFIG, user)
+    cfg = deep_merge(DEFAULT_CONFIG, user)
+    _CONFIG_CACHE.update(key=key, cfg=cfg)
+    return copy.deepcopy(cfg)
 
 
 def save_config(cfg, path=None):
@@ -790,6 +826,7 @@ def save_config(cfg, path=None):
         os.chmod(path, 0o600)  # 凭据文件只允许本人读写
     except OSError:
         pass
+    _CONFIG_CACHE.update(key=_config_stat_key(path), cfg=deep_merge(DEFAULT_CONFIG, cfg))
     return path
 
 
@@ -1241,6 +1278,213 @@ def detect_drive(url, cfg=None):
     return "", {}
 
 
+AUTH_HINTS = {
+    "baidu": ("官方网页会话", "百度分享默认走官方网页零客户端会话；不读取浏览器 Cookie，也不需要粘贴 BDUSS/STOKEN。"),
+    "aliyun": ("官方 OAuth / AList 授权", "先在 AList 添加阿里云盘并完成官方授权；refresh_token 不进聊天。"),
+    "quark": ("quark-cli / AList 登录", "先完成夸克官方登录/授权；Cookie 只写工具配置或系统凭据库。"),
+    "weiyun": ("OAuth / AList 授权", "先完成微云官方登录/授权，再转存到可访问路径。"),
+    "lanzou": ("AList 授权 / 公开链接", "必要时先在 AList 授权；公开直链可不登录。"),
+}
+AUTH_HINT_DEFAULT = ("官方 OAuth / AList / 官方 CLI", "先完成官方登录或 AList 授权；凭据不进聊天。")
+
+
+def _baidupcs_login_state(cfg=None):
+    """只读检查 BaiduPCS-Go 本机登录态；不读取/输出凭据。"""
+    cfg = cfg or load_config()
+    if (cfg.get("drives") or {}).get("baidu", {}).get("credential_ref"):
+        return True
+    home = Path.home()
+    candidates = [
+        home / ".config" / "BaiduPCS-Go" / "pcs_config.json",
+        home / "Library" / "Application Support" / "BaiduPCS-Go" / "pcs_config.json",
+        home / "BaiduPCS-Go" / "pcs_config.json",
+    ]
+    # 本机 BaiduPCS-Go 默认把配置放在可执行文件同目录；登录态检查必须覆盖它。
+    binary = find_engine_binary("baidupcs", cfg)
+    if binary:
+        candidates.insert(0, Path(binary).resolve().parent / "pcs_config.json")
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if data.get("active_user"):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def login_gate_for_url(url, cfg=None):
+    """识别到网盘链接后立即返回登录/授权提示；不做网络请求、不读取凭据明文。"""
+    cfg = cfg or load_config()
+    key, spec = detect_drive(url, cfg)
+    if not key or key in ("direct", "stream", "bittorrent"):
+        return {"required": False, "blocking": False, "status": "not_required"}
+    drive_cfg = (cfg.get("drives") or {}).get(key, {})
+    engine = spec.get("engine", "")
+    mode, message = AUTH_HINTS.get(key, AUTH_HINT_DEFAULT)
+    if key == "baidu":
+        # 默认走官方网页匿名会话；只有显式选择 baidupcs 时才检查本机登录态。
+        if engine in ("baiduweb", "baidu_web", "web", "browser"):
+            return {
+                "required": False,
+                "blocking": False,
+                "status": "web_session",
+                "drive": key,
+                "drive_name": spec.get("name", key),
+                "engine": engine,
+                "mode": mode,
+                "message": message,
+                "login_url": "",
+                "reference": spec.get("reference", ""),
+            }
+        ready = _baidupcs_login_state(cfg) or bool(drive_cfg.get("credential_ref") or drive_cfg.get("cookie_file"))
+        status = "ready" if ready else "not_ready"
+    elif engine == "alist":
+        alist_url = (cfg.get("engines") or {}).get("alist_url", "").strip()
+        status = "ready" if (alist_url and (drive_cfg.get("credential_ref") or drive_cfg.get("cookie_file"))) else ("unknown" if alist_url else "not_ready")
+    else:
+        ready = bool(drive_cfg.get("credential_ref") or drive_cfg.get("cookie_file"))
+        status = "ready" if ready else "unknown" if engine == "custom" else "not_ready"
+    return {
+        "required": True,
+        "blocking": status != "ready",
+        "status": status,
+        "drive": key,
+        "drive_name": spec.get("name", key),
+        "engine": engine,
+        "mode": mode,
+        "message": message,
+        "login_url": "/login?drive=" + quote(key),
+        "reference": spec.get("reference", ""),
+    }
+
+
+def fast_login_gate(url, cfg=None):
+    """兼容更直观的 API 名称；纯本地检查，用于 Agent/Web 接收链接后立即提醒。"""
+    return login_gate_for_url(url, cfg)
+
+
+ZERO_CLIENT_BRIDGES = {
+    "web": {
+        "id": "web",
+        "label": "官方网页会话桥",
+        "requirement": "Python；仅使用官方分享页和官方接口，不读取浏览器 Cookie，不要求桌面客户端。",
+        "steps": ["识别登录态、提取码、单文件/多文件", "递归列出目录并拆成文件任务", "逐文件获取官方直链、断点续传和失败重试"],
+        "client_required": "无网盘客户端；遇验证码/风控/会员/付费限制安全失败",
+    },
+    "browser": {
+        "id": "browser",
+        "label": "浏览器直链捕获桥",
+        "requirement": "Chrome/Edge 插件 + 官方网页登录；插件只捕获你主动触发的下载 URL，不读取登录态。",
+        "steps": ["在官方网页登录并点击下载", "插件捕获官方生成的直链", "网盘通用内置 HTTP/aria2 续传下载"],
+        "client_required": "无网盘客户端；不破解登录/签名/风控",
+    },
+    "alist": {
+        "id": "alist",
+        "label": "AList 驱动桥",
+        "requirement": "已有 AList 服务并挂载对应网盘；网盘授权留在 AList。",
+        "steps": ["AList 添加网盘存储", "分享文件转存到自己网盘", "WebDAV/rclone/HTTP 从 AList 下载"],
+        "client_required": "无各家网盘客户端；AList 是统一服务桥",
+    },
+    "oauth": {
+        "id": "oauth",
+        "label": "官方 OAuth / WebDAV 桥",
+        "requirement": "官方开放平台或 WebDAV 凭据；凭据只进系统凭据库。",
+        "steps": ["完成官方授权", "用 rclone/AList/官方 API 拉取", "无需安装网盘桌面客户端"],
+        "client_required": "无网盘客户端",
+    },
+    "builtin": {
+        "id": "builtin",
+        "label": "内置 HTTP / 流媒体桥",
+        "requirement": "Python；可选 aria2 / yt-dlp。",
+        "steps": ["识别直链或公开流", "用内置 HTTPDownloader/aria2/yt-dlp 下载"],
+        "client_required": "无网盘客户端",
+    },
+}
+OAUTH_DRIVE_KEYS = {"aliyun", "onedrive", "googledrive", "dropbox", "mega", "pcloud", "protondrive", "yandexdisk"}
+
+
+def zero_client_options(key, cfg=None):
+    """返回某类链接的零网盘客户端桥；不承诺绕过官方限制。"""
+    cfg = cfg or load_config()
+    spec = all_drives(cfg).get(key or "", {})
+    engine = spec.get("engine", "")
+    if not spec:
+        return [dict(ZERO_CLIENT_BRIDGES["builtin"], recommended=True)]
+    options = []
+    if key in ("direct", "stream", "bittorrent"):
+        return [dict(ZERO_CLIENT_BRIDGES["builtin"], recommended=True)]
+    if key == "baidu" or engine in ("baiduweb", "baidu_web", "web"):
+        options.append(dict(ZERO_CLIENT_BRIDGES["web"], recommended=True))
+    options.append(dict(ZERO_CLIENT_BRIDGES["browser"], recommended=not options))
+    if engine in ("alist", "webdav") or key == "baidu":
+        options.append(dict(ZERO_CLIENT_BRIDGES["alist"], recommended=len(options) == 1 and engine == "alist"))
+    if key in OAUTH_DRIVE_KEYS or engine == "webdav":
+        options.append(dict(ZERO_CLIENT_BRIDGES["oauth"], recommended=False))
+    # 不再推荐安装各家桌面客户端；baidupcs/quark-cli 只作为显式指定的兼容回退。
+    return options
+
+
+def engine_catalog_payload(url="", cfg=None):
+    """输出零客户端桥、本地兼容回退和静态适用范围。"""
+    cfg = cfg or load_config()
+    if url:
+        key, spec = detect_drive(url, cfg)
+    else:
+        key, spec = "", {}
+    drives = []
+    for drive_key, drive_spec in sorted(all_drives(cfg).items()):
+        if drive_key in ("direct", "stream", "bittorrent"):
+            continue
+        drives.append({
+            "drive": drive_key,
+            "name": drive_spec.get("name", drive_key),
+            "default_engine": drive_spec.get("engine", ""),
+            "zero_client": zero_client_options(drive_key, cfg),
+        })
+    return {
+        "ok": True,
+        "url": url,
+        "detected": {"drive": key, "name": spec.get("name", ""), "engine": spec.get("engine", "")} if key else {},
+        "zero_client": zero_client_options(key, cfg) if key else [],
+        "drives": drives,
+        "boundary": "零客户端指不安装百度/夸克等桌面客户端；不绕过登录、签名、风控、限速或 DRM。官方未给直链时仍无法下载。",
+    }
+
+
+def cmd_engines(args):
+    payload = engine_catalog_payload(args.url or "")
+    print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json else json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def login_gate_for_drive_key(key, cfg=None):
+    """按网盘 key 返回登录/授权提示；供 /login?drive= 使用。"""
+    cfg = cfg or load_config()
+    spec = all_drives(cfg).get(key)
+    if not spec:
+        return {"required": False, "blocking": False, "status": "not_required"}
+    domain = (spec.get("domains") or [""])[0]
+    return login_gate_for_url("https://" + domain if domain else "", cfg)
+
+
+def cmd_auth(args):
+    gate = login_gate_for_url(args.url)
+    payload = dict(gate)
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        if not gate.get("required"):
+            print("✅ 该链接不需要提前登录/授权。")
+            return 0
+        print("%s：%s" % (gate.get("drive_name"), gate.get("mode")))
+        print("  %s" % gate.get("message"))
+        print("  登录页：%s" % gate.get("login_url"))
+    return 0 if not gate.get("blocking") else 2
+
+
 def sanitize(name, fallback="download"):
     name = unquote(name or "").strip()
     name = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", name)
@@ -1319,7 +1563,27 @@ def find_engine_binary(engine, cfg):
     configured = ((cfg.get("engines") or {}).get(engine) or "").strip()
     if configured:
         p = Path(os.path.expanduser(configured))
-        return str(p) if p.exists() else ""
+        if p.exists():
+            return str(p)
+    # 兼容：路径写在 drives.<网盘>.engine_command（如 drives.baidu.engine_command）
+    # 网盘的默认 engine 可能已被换成别的（如百度默认 baiduweb），这里按引擎↔网盘映射兜底。
+    engine_drive_hints = {
+        "baidupcs": ("baidu",), "quarkcli": ("quark",), "alist": ("alist",),
+        "aria2": ("direct", "bittorrent"), "ytdlp": ("stream",),
+    }
+    try:
+        hints = engine_drive_hints.get(engine, ())
+        for dkey, dspec in all_drives(cfg).items():
+            if dspec.get("engine") != engine and dkey not in hints:
+                continue
+            cand = str((cfg.get("drives") or {}).get(dkey, {}).get("engine_command") or "").strip()
+            if not cand:
+                continue
+            p = Path(os.path.expanduser(cand))
+            if p.is_file() and os.access(str(p), os.X_OK):
+                return str(p)
+    except Exception:
+        pass
     for name in ENGINE_BINARIES.get(engine, []):
         found = shutil.which(name)
         if found:
@@ -1410,6 +1674,9 @@ def public_plan(plan):
         "engine": plan.get("engine", ""),
         "tier": plan.get("tier", ""),
         "tier_source": plan.get("tier_source", ""),
+        "auth": plan.get("auth", {}),
+        "login_url": (plan.get("auth") or {}).get("login_url", ""),
+        "zero_client": plan.get("zero_client", []),
         "target": plan.get("target", ""),
         "remote_kind": plan.get("remote_kind", ""),
         "remote_name": plan.get("remote_name", ""),
@@ -1422,7 +1689,71 @@ def public_plan(plan):
         "web_host": plan.get("web_host", ""),
         "web_url": plan.get("web_url", ""),
         "web_guide": plan.get("web_guide", ""),
+        "web_bridge": ({"driver": (plan.get("web") or {}).get("driver", "")}
+                       if plan.get("web") else {}),
     }
+
+
+def _looks_like_baidupcs_download(argv):
+    """判断某步骤是不是"用 BaiduPCS-Go 下载"（含自定义 engine_command 的情况）。"""
+    if not argv:
+        return False
+    head = str(argv[0])
+    small = head.lower()
+    if "baidupcs" not in small and "baidupcs-go" not in small:
+        return False
+    return any(str(a) == "download" for a in argv[:4])
+
+
+def _is_bare_baidupcs_binary(argv):
+    """engine_command 只写了 BaiduPCS-Go 可执行文件、没有子命令的情况。"""
+    if len(argv) != 1:
+        return False
+    return "baidupcs" in str(argv[0]).lower()
+
+
+def _baidu_save_path(cfg):
+    try:
+        return (((cfg or {}).get("drives") or {}).get("baidu", {}) or {}).get("save_path") or "/网盘下载"
+    except Exception:
+        return "/网盘下载"
+
+
+def _attach_step_locks(plan, key, target, cfg=None):
+    """给网盘下载步骤挂单实例锁，并做续传安全修正。
+
+    2026-10-15 教训：同一来源被多个 BaiduPCS-Go 进程同时下载，
+    互相抢带宽/覆盖断点，表现为"跑了很久没进展"；且 --ow 会让已下分片从头重下。
+    规则：同 (drive, source, target) 只允许一个进程；一律禁止 --ow；补 --retry。
+    """
+    if key != "baidu":
+        return plan
+    for step in plan.get("steps", []) or []:
+        if step.get("lock"):
+            continue
+        argv = list(step.get("argv") or [])
+        engine = step.get("engine", "")
+        if engine == "custom" and _is_bare_baidupcs_binary(argv):
+            argv = [argv[0], "download", _baidu_save_path(cfg), "--saveto", str(target), "--retry", "5"]
+            step["argv"] = argv
+            step["note"] = "BaiduPCS-Go 从自己网盘下载（断点续传；禁止 --ow；分享需先转存到自己网盘）"
+        is_dl = engine == "baidupcs" or (engine == "custom" and _looks_like_baidupcs_download(argv))
+        if not is_dl:
+            continue
+        src = ""
+        try:
+            i = argv.index("download")
+            src = argv[i + 1] if len(argv) > i + 1 else ""
+        except ValueError:
+            src = ""
+        if "--ow" in argv:
+            argv = [a for a in argv if a != "--ow"]
+            step["note"] = (step.get("note") or "") + "（已自动移除 --ow：否则已下分片会从头重下）"
+        if "--retry" not in argv:
+            argv = argv + ["--retry", "5"]
+        step["argv"] = argv
+        step["lock"] = {"drive": key, "source": src, "target": str(target)}
+    return plan
 
 
 def build_plan(url, pwd="", to=None, cfg=None, engine=None, tier=None, path=None, classify=None):
@@ -1455,6 +1786,17 @@ def build_plan(url, pwd="", to=None, cfg=None, engine=None, tier=None, path=None
         "missing": [],
         "warnings": [],
     }
+    auth = login_gate_for_url(url, cfg)
+    plan["auth"] = auth
+    plan["zero_client"] = zero_client_options(key, cfg)
+    if not pwd:
+        try:
+            from pancli.webengine import extract_pwd_from_url as _epfu
+            pwd = _epfu(url)
+        except Exception:
+            pwd = ""
+    if auth.get("required"):
+        plan["warnings"].insert(0, "%s：%s" % (auth.get("mode"), auth.get("message")))
     # 常见分享盘常带提取码：未提供 --pwd 时提前用人话提示，避免下载失败后无头绪
     if not pwd and key in ("baidu", "quark", "lanzou", "123pan", "weiyun"):
         plan["warnings"].append(
@@ -1484,8 +1826,29 @@ def build_plan(url, pwd="", to=None, cfg=None, engine=None, tier=None, path=None
 
     plan["tier"] = tier
 
+    if engine in ("baiduweb", "baidu_web", "web") and key == "baidu":
+        from pancli.webengine import build_web_plan as _bwp
+        plan["web"] = _bwp(url, pwd=pwd or "", target=str(target), driver="baidu", cfg=cfg)
+        plan["zero_client_selected"] = True
+        plan["web_lock"] = {"drive": key, "source": url, "target": str(target)}
+        plan["steps"].append({
+            "engine": "baiduweb",
+            "argv": [],
+            "note": "百度官方网页会话：探测分享页 → 递归列出文件 → 按文件获取官方直链并断点续传",
+        })
+        return plan
+
     if category:
         plan["warnings"].append("智能分类已启用：自动保存到「%s」目录" % category)
+
+    if engine == "browser":
+        # 浏览器桥只接受用户/插件已经捕获到的直链；原始分享链接不能伪装成直链。
+        plan["zero_client_selected"] = True
+        if key not in ("direct", "stream", "bittorrent"):
+            plan["missing"].append("浏览器桥捕获到的官方直链（先在官方网页触发下载）")
+            plan["steps"] = []
+            return plan
+        engine = "aria2" if find_engine_binary("aria2", cfg) else "http"
 
     custom_cmd = (drive_cfg.get("engine_command") or "").strip()
 
@@ -1494,6 +1857,7 @@ def build_plan(url, pwd="", to=None, cfg=None, engine=None, tier=None, path=None
             custom_cmd.format(url=url, pwd=pwd or "", dir=str(target), name=sanitize(spec["name"]), tier=tier)
         )
         plan["steps"].append({"engine": "custom", "argv": argv, "note": "自定义引擎命令"})
+        _attach_step_locks(plan, key, target, cfg)
         return plan
 
     if engine == "http":
@@ -1638,8 +2002,10 @@ def build_plan(url, pwd="", to=None, cfg=None, engine=None, tier=None, path=None
         binary = binary or "BaiduPCS-Go"
         plan["steps"].append({"engine": "baidupcs", "argv": [binary, "transfer", url, pwd or "", save_path],
                               "note": "转存到自己网盘（需已用 BaiduPCS-Go login 登录）"})
-        plan["steps"].append({"engine": "baidupcs", "argv": [binary, "download", save_path, "--saveto", str(target)],
-                              "note": "从自己网盘批量下载到本地（断点续传）"})
+        plan["steps"].append({"engine": "baidupcs",
+                              "argv": [binary, "download", save_path, "--saveto", str(target), "--retry", "5"],
+                              "note": "从自己网盘批量下载到本地（断点续传；禁止加 --ow，否则已下分片会从头重下）",
+                              "lock": {"drive": "baidu", "source": save_path, "target": str(target)}})
 
     elif engine == "quarkcli":
         binary = find_engine_binary("quarkcli", cfg)
@@ -1655,6 +2021,7 @@ def build_plan(url, pwd="", to=None, cfg=None, engine=None, tier=None, path=None
         plan["missing"].append("引擎 %s 未配置 engine_command" % engine)
         plan["steps"].append({"engine": engine, "argv": [], "note": "在 config.json 的 drives.%s.engine_command 配置命令模板" % key})
 
+    _attach_step_locks(plan, key, target, cfg)
     return plan
 
 
@@ -1668,6 +2035,15 @@ def run_plan(plan, timeout=0, dry_run=True):
         if dry_run:
             print("DRY-RUN:", " ".join(shlex.quote(x) for x in mask_argv(argv)))
             continue
+        if step.get("lock"):
+            import atexit as _atexit
+            from pancli import tasklock as _tlk
+            _gate = _tlk.acquire_for_step(step)
+            if not _gate["ok"]:
+                print("⛔ %s" % _gate["message"])
+                log_line("LOCK-BUSY: " + _gate["message"])
+                return 9
+            _atexit.register(_gate["lock"].release)
         print("RUN:", " ".join(shlex.quote(x) for x in mask_argv(argv)))
         log_line("RUN: " + " ".join(mask_argv(argv)))
         started = time.time()
@@ -1723,6 +2099,32 @@ def run_plan_detailed(plan, timeout=0, dry_run=True, emit_events=False, live=Non
     results = []
     if not plan.get("ok"):
         return 1, results
+    if plan.get("web"):
+        from pancli.webengine import execute_web_plan as _ewp
+        _gate = None
+        lock_spec = plan.get("web_lock")
+        if lock_spec:
+            from pancli import tasklock as _tlk
+            _gate = _tlk.acquire_for_step({"lock": lock_spec, "note": "百度官方网页会话下载"})
+            if not _gate["ok"]:
+                message = _gate["message"]
+                print("⛔ %s" % message)
+                log_line("LOCK-BUSY: " + message)
+                return 9, [{
+                    "index": 1,
+                    "engine": "baiduweb",
+                    "note": "百度官方网页会话下载",
+                    "argv": [],
+                    "rc": 9,
+                    "elapsed": 0.0,
+                    "error": message,
+                    "hint": message,
+                }]
+        try:
+            return _ewp(plan, emit_events=emit_events, live=live, task_control=task_control)
+        finally:
+            if _gate is not None:
+                _gate["lock"].release()
     for idx, step in enumerate(plan.get("steps", []), start=1):
         argv = step.get("argv") or []
         entry = {
@@ -1753,6 +2155,21 @@ def run_plan_detailed(plan, timeout=0, dry_run=True, emit_events=False, live=Non
             entry["dry_run"] = True
             results[-1] = entry
             continue
+        if step.get("lock"):
+            import atexit as _atexit
+            from pancli import tasklock as _tlk
+            _gate = _tlk.acquire_for_step(step)
+            if not _gate["ok"]:
+                print("⛔ %s" % _gate["message"])
+                log_line("LOCK-BUSY: " + _gate["message"])
+                entry["rc"] = 9
+                entry["error"] = _gate["message"]
+                entry["hint"] = _gate["message"]
+                results[-1] = entry
+                if emit_events:
+                    print(json.dumps({"event": "step_done", "index": idx, "engine": entry["engine"], "rc": 9, "error": entry["error"]}, ensure_ascii=False))
+                return 9, results
+            _atexit.register(_gate["lock"].release)
         print("RUN:", " ".join(shlex.quote(x) for x in mask_argv(argv)))
         log_line("RUN: " + " ".join(mask_argv(argv)))
         started = time.time()
@@ -1973,10 +2390,99 @@ def cmd_detect(args):
     if not key:
         print("❌ 无法识别")
         return 1
+    auth = login_gate_for_url(args.url)
     print(json.dumps({"drive": key, "name": spec["name"], "engine": spec["engine"],
-                      "reference": spec.get("reference", "")}, ensure_ascii=False, indent=2))
+                      "reference": spec.get("reference", ""), "auth": auth}, ensure_ascii=False, indent=2))
     return 0
 
+
+
+def _route_cache_key(cfg, url, pwd="", engine="", tier="", path=""):
+    """路由短缓存键：链接/参数 + 配置内容签名 + 百度本机登录态。"""
+    config_blob = json.dumps(cfg, ensure_ascii=False, sort_keys=True, default=str)
+    config_sig = hashlib.sha256(config_blob.encode("utf-8")).hexdigest()
+    return (str(url or ""), str(pwd or ""), str(engine or ""), str(tier or ""), str(path or ""),
+            config_sig, bool(_baidupcs_login_state(cfg)))
+
+
+def route_link_payload(cfg, url, pwd="", engine="", tier="", path="", cache=True):
+    """一次返回识别、登录门禁、依赖、目标目录、零客户端桥和下一步动作；纯本地不联网。
+
+    服务内同参数短缓存 2 秒；百度登录态或配置变化会自动失效。
+    """
+    started = time.perf_counter()
+    now = time.time()
+    key = _route_cache_key(cfg, url, pwd, engine, tier, path) if cache else None
+    if cache:
+        item = _ROUTE_CACHE.get(key)
+        if item and now - item["expires"] < _ROUTE_CACHE_TTL:
+            res = copy.deepcopy(item["payload"])
+            res["cache_hit"] = True
+            res["cache_ttl_seconds"] = _ROUTE_CACHE_TTL
+            res["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
+            return res
+    res = _probe_link_checks(cfg, url, pwd=pwd, engine=engine, tier=tier, path=path)
+    auth = res.get("auth") or {}
+    if auth.get("blocking"):
+        action = "login"
+    elif res.get("missing"):
+        action = "install_or_configure"
+    elif not res.get("ok"):
+        action = "fix_preflight"
+    else:
+        action = "download"
+    res["route"] = "zero_client" if any((x or {}).get("id") == "browser" for x in res.get("zero_client", [])) else "default"
+    res["next_action"] = action
+    res["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
+    res["cache_hit"] = False
+    res["cache_ttl_seconds"] = _ROUTE_CACHE_TTL
+    if cache:
+        _ROUTE_CACHE[key] = {"payload": copy.deepcopy(res), "expires": now}
+        # 只保留最近 128 条，避免常驻服务增长。
+        if len(_ROUTE_CACHE) > 128:
+            oldest = sorted(_ROUTE_CACHE.items(), key=lambda kv: kv[1]["expires"])[:len(_ROUTE_CACHE) - 128]
+            for k, _ in oldest:
+                _ROUTE_CACHE.pop(k, None)
+    return res
+
+
+def compact_route_payload(res):
+    """给 Agent/LLM 输出的最小路由结果；足够决定下一步，避免整份预检刷屏。"""
+    return {
+        "ok": bool(res.get("ok")),
+        "drive": res.get("drive", ""),
+        "drive_name": res.get("drive_name", ""),
+        "engine": res.get("engine", ""),
+        "route": res.get("route", ""),
+        "next_action": res.get("next_action", ""),
+        "blocking": bool((res.get("auth") or {}).get("blocking")),
+        "login_required": bool(res.get("login_required")),
+        "login_url": res.get("login_url", ""),
+        "missing": res.get("missing", []) if res.get("next_action") == "install_or_configure" else [],
+        "warnings": (res.get("warnings") or [])[:2] if res.get("next_action") == "download" else [],
+        "target": res.get("target", ""),
+        "latency_ms": res.get("latency_ms", 0),
+    }
+
+
+def cmd_route(args):
+    res = route_link_payload(load_config(), args.url, pwd=args.pwd or "", engine=args.engine or "",
+                             tier=args.tier or "", path=args.path or "",
+                             cache=not getattr(args, "no_cache", False))
+    if args.json:
+        if getattr(args, "brief", False):
+            print(json.dumps(compact_route_payload(res), ensure_ascii=False, separators=(",", ":")))
+        else:
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
+    print("路由：%s" % args.url)
+    print("  网盘：%s（%s）" % (res.get("drive_name"), res.get("drive")))
+    print("  下一步：%s" % res.get("next_action"))
+    print("  路径：%s · 耗时：%sms" % (res.get("route"), res.get("latency_ms")))
+    for c in res.get("checks", []):
+        mark = "✅" if c.get("ok") else "❌"
+        print("  %s %s：%s" % (mark, c.get("name"), c.get("detail")))
+    return 0 if res.get("next_action") == "download" else 2
 
 
 def _probe_link_checks(cfg, url, pwd="", engine="", tier="", path=""):
@@ -1987,8 +2493,11 @@ def _probe_link_checks(cfg, url, pwd="", engine="", tier="", path=""):
                 "checks": [{"name": "识别", "ok": False, "detail": "无法识别该链接"}],
                 "missing": [], "warnings": ["这不是默认支持的网盘域名，也不是 http(s) 直链"]}
     plan = build_plan(url, pwd=pwd, cfg=cfg, engine=engine or None, tier=tier or None, path=path or None)
+    auth = plan.get("auth") or login_gate_for_url(url, cfg)
     checks = []
     checks.append({"name": "识别", "ok": True, "detail": "%s（%s）" % (spec["name"], key)})
+    checks.append({"name": "登录/授权", "ok": not auth.get("blocking"),
+                   "detail": auth.get("message", "") if auth.get("blocking") else "%s（状态：%s）" % (auth.get("mode"), auth.get("status"))})
     missing = list(plan.get("missing") or [])
     checks.append({"name": "依赖与配置", "ok": not missing,
                    "detail": "；".join(missing) if missing else "依赖与配置齐备"})
@@ -2008,8 +2517,10 @@ def _probe_link_checks(cfg, url, pwd="", engine="", tier="", path=""):
     checks.append({"name": "目标目录", "ok": target_ok, "detail": detail})
     if pwd:
         checks.append({"name": "提取码", "ok": True, "detail": "已提供"})
-    return {"ok": (not missing) and target_ok, "drive": key, "drive_name": spec["name"],
-            "engine": plan.get("engine", ""), "target": str(target),
+    return {"ok": (not missing) and target_ok and not auth.get("blocking"), "drive": key, "drive_name": spec["name"],
+            "engine": plan.get("engine", ""), "target": str(target), "auth": auth,
+            "zero_client": plan.get("zero_client", []),
+            "login_required": auth.get("required", False), "login_url": auth.get("login_url", ""),
             "checks": checks, "missing": missing, "warnings": warnings}
 
 
@@ -2190,7 +2701,30 @@ def cmd_set_drive(args):
     return 0
 
 
+def _login_baidu_qr(args):
+    """百度官方扫码登录：委托 pancli.baidu_login，登录态写入 BaiduPCS-Go。"""
+    cfg = load_config()
+    drive_key = getattr(args, "drive", "baidu")
+    if "baidu" not in drive_key and "pan.baidu.com" not in drive_key:
+        print("❌ --qr 目前只支持百度网盘")
+        return 1
+    binary = find_engine_binary("baidupcs", cfg) or "BaiduPCS-Go"
+    if find_engine_binary("baidupcs", cfg) is None:
+        print("⚠️ 未找到 BaiduPCS-Go，请先安装并 set-drive baidu --engine-command <路径>")
+    from pancli.baidu_login import run as _qr_run
+    res = _qr_run(binary, emit_json=bool(getattr(args, "json", False)))
+    if getattr(args, "json", False):
+        print(json.dumps(res, ensure_ascii=False))
+    elif res.get("ok"):
+        print("✅ 已登录 BaiduPCS-Go；接下来：pan get <链接> --engine baidupcs")
+    else:
+        print("❌ 扫码登录未完成：%s" % res.get("error", ""))
+    return 0 if res.get("ok") else 1
+
+
 def cmd_login(args):
+    if getattr(args, "qr", False):
+        return _login_baidu_qr(args)
     drive_key, spec = detect_drive(args.drive) if "://" in args.drive else (args.drive, all_drives(load_config()).get(args.drive, {}))
     if not spec:
         print("❌ 未找到网盘：%s（可用 detect 或 references/06-扩展新网盘.md 自定义）" % drive_key)
@@ -2217,21 +2751,24 @@ def cmd_login(args):
 REMOTE_KINDS = ("ssh", "rclone", "webdav", "smb", "s3", "mount")
 
 
-def build_parser():
-    p = argparse.ArgumentParser(prog="pan", description="多网盘统一下载入口（免费账号默认）")
+def build_parser(lang="zh"):
+    desc = ("Unified cloud-drive download entry (free-account default)." if lang == "en"
+            else "多网盘统一下载入口（免费账号默认）")
+    p = argparse.ArgumentParser(prog="pan", description=desc)
+    i18n.add_lang_arg(p, default=lang)
     sub = p.add_subparsers(dest="cmd")
 
-    d = sub.add_parser("doctor", help="检查环境与依赖")
+    d = sub.add_parser("doctor", help=("check environment and dependencies" if lang == "en" else "检查环境与依赖"))
     d.add_argument("--json", action="store_true")
     d.set_defaults(func=_lazy_cmd("pancli.setup", "cmd_doctor"))
 
-    p_init = sub.add_parser("init", help="创建配置文件")
+    p_init = sub.add_parser("init", help=("create config file" if lang == "en" else "创建配置文件"))
     p_init.add_argument("--force", action="store_true")
     p_init.add_argument("--wizard", action="store_true", help="环境检测向导")
     p_init.add_argument("--json", action="store_true", help="输出 JSON")
     p_init.set_defaults(func=cmd_init)
 
-    p_setup = sub.add_parser("setup", help="一键安装 + 配置向导；local 默认，nas_docker/server_docker 可选")
+    p_setup = sub.add_parser("setup", help=("one-click install + config wizard; local default, nas_docker/server_docker optional" if lang == "en" else "一键安装 + 配置向导；local 默认，nas_docker/server_docker 可选"))
     p_setup.add_argument("--root", help="设置默认下载目录")
     p_setup.add_argument("--mode", choices=["local", "nas_docker", "server_docker"], help="部署模式")
     p_setup.add_argument("--host", help="服务对外主机/IP")
@@ -2244,14 +2781,35 @@ def build_parser():
     p_setup.add_argument("--json", action="store_true", help="输出 JSON")
     p_setup.set_defaults(func=_lazy_cmd("pancli.setup", "cmd_setup"))
 
-    sub.add_parser("show", help="显示配置（凭据打码）").set_defaults(func=cmd_show)
+    sub.add_parser("show", help=("show config (credentials masked)" if lang == "en" else "显示配置（凭据打码）")).set_defaults(func=cmd_show)
 
-    p_detect = sub.add_parser("detect", help="识别链接属于哪个网盘")
+    p_auth = sub.add_parser("auth", help=("check login/auth hint after link recognition (local only, no network)" if lang == "en" else "链接识别后立即检查登录/授权提示（纯本地，不联网）"))
+    p_auth.add_argument("url")
+    p_auth.add_argument("--json", action="store_true", help="输出 JSON")
+    p_auth.set_defaults(func=cmd_auth)
+
+    p_route = sub.add_parser("route", help=("route a link: recognize + auth gate + preflight + next action (local)" if lang == "en" else "链接一次路由：识别 + 登录门禁 + 预检 + 下一步动作（纯本地）"))
+    p_route.add_argument("url")
+    p_route.add_argument("--pwd", help="分享提取码")
+    p_route.add_argument("--engine")
+    p_route.add_argument("--tier", choices=["free", "vip", "auto"])
+    p_route.add_argument("--path", help="AList/WebDAV 已挂载路径")
+    p_route.add_argument("--json", action="store_true", help="输出 JSON")
+    p_route.add_argument("--brief", action="store_true", help="输出给 Agent 的最小 JSON，省 token")
+    p_route.add_argument("--no-cache", action="store_true", help="跳过 2 秒本地路由短缓存")
+    p_route.set_defaults(func=cmd_route)
+
+    p_engines = sub.add_parser("engines", help=("show zero-client bridge, recommended path and local fallbacks" if lang == "en" else "查看零客户端桥、推荐路径与本地兼容回退"))
+    p_engines.add_argument("url", nargs="?", default="", help="可选：只分析这一条链接")
+    p_engines.add_argument("--json", action="store_true", help="输出 JSON")
+    p_engines.set_defaults(func=cmd_engines)
+
+    p_detect = sub.add_parser("detect", help=("identify which drive a link belongs to" if lang == "en" else "识别链接属于哪个网盘"))
     p_detect.add_argument("url")
     p_detect.add_argument("--json", action="store_true", help="输出 JSON（默认即 JSON）")
     p_detect.set_defaults(func=cmd_detect)
 
-    p_direct = sub.add_parser("direct", help="通用 HTTP/HTTPS 直链下载（只下载你有授权的公开直链）")
+    p_direct = sub.add_parser("direct", help=("generic HTTP/HTTPS direct download (only public links you are authorized to download)" if lang == "en" else "通用 HTTP/HTTPS 直链下载（只下载你有授权的公开直链）"))
     p_direct.add_argument("url")
     p_direct.add_argument("--to", help="保存目录（默认当前目录）")
     p_direct.add_argument("--split", type=int, default=4, help="Range 分片并发数")
@@ -2264,7 +2822,7 @@ def build_parser():
                           help="明确确认你已获授权/该内容为公开许可，非交互必需")
     p_direct.set_defaults(func=_lazy_cmd("pancli.carriers", "cmd_direct"))
 
-    p_test = sub.add_parser("test", help="测试连接：识别链接并检查依赖/目录是否就绪（不下载）")
+    p_test = sub.add_parser("test", help=("test connection: recognize link and check deps/dirs (no download)" if lang == "en" else "测试连接：识别链接并检查依赖/目录是否就绪（不下载）"))
     p_test.add_argument("url")
     p_test.add_argument("--pwd", help="分享提取码")
     p_test.add_argument("--engine")
@@ -2273,7 +2831,7 @@ def build_parser():
     p_test.add_argument("--json", action="store_true", help="给 agent 输出 JSON")
     p_test.set_defaults(func=cmd_test)
 
-    p_set = sub.add_parser("set", help="修改全局配置")
+    p_set = sub.add_parser("set", help=("modify global config" if lang == "en" else "修改全局配置"))
     p_set.add_argument("--root")
     p_set.add_argument("--tier", choices=["free", "vip", "auto"])
     p_set.add_argument("--engine-name")
@@ -2290,7 +2848,7 @@ def build_parser():
     p_set.add_argument("--auto-classify", choices=["on", "off", ""], default="", help="智能默认：按扩展名自动归档（on/off）")
     p_set.set_defaults(func=cmd_set)
 
-    p_sd = sub.add_parser("set-drive", help="修改单个网盘配置")
+    p_sd = sub.add_parser("set-drive", help=("modify one drive config" if lang == "en" else "修改单个网盘配置"))
     p_sd.add_argument("drive")
     p_sd.add_argument("--tier", choices=["free", "vip", "auto"])
     p_sd.add_argument("--account-tier", choices=["free", "vip"])
@@ -2302,7 +2860,7 @@ def build_parser():
     p_sd.add_argument("--save-path")
     p_sd.set_defaults(func=cmd_set_drive)
 
-    p_secret = sub.add_parser("secret", help="安全保存、检查、删除或迁移凭据")
+    p_secret = sub.add_parser("secret", help=("safely save/check/delete/migrate credentials" if lang == "en" else "安全保存、检查、删除或迁移凭据"))
     secret_sub = p_secret.add_subparsers(dest="secret_cmd")
     ps = secret_sub.add_parser("set", help="把密码写入系统凭据库")
     ps.add_argument("name")
@@ -2321,12 +2879,14 @@ def build_parser():
     pm = secret_sub.add_parser("migrate", help="把旧配置里的已知明文凭据迁入系统凭据库")
     pm.set_defaults(func=cmd_secret_migrate)
 
-    p_login = sub.add_parser("login", help="查看某网盘的登录/授权步骤")
+    p_login = sub.add_parser("login", help=("show login/authorization steps for a drive; Baidu supports --qr official QR" if lang == "en" else "查看某网盘的登录/授权步骤；百度支持 --qr 官方扫码"))
     p_login.add_argument("drive")
     p_login.add_argument("--open", action="store_true", help="用默认程序打开授权教程")
+    p_login.add_argument("--qr", action="store_true", help="百度：走官方扫码登录，写入 BaiduPCS-Go 本机登录态")
+    p_login.add_argument("--json", action="store_true", help="百度 --qr：以 JSON 输出结果")
     p_login.set_defaults(func=cmd_login)
 
-    p_movie = sub.add_parser("movie", help="免费电影/X视频/NAS 下载")
+    p_movie = sub.add_parser("movie", help=("free movie / X video / NAS download" if lang == "en" else "免费电影/X视频/NAS 下载"))
     movie_sub = p_movie.add_subparsers(dest="movie_cmd")
     ms = movie_sub.add_parser("sources", help="列出公开/公版/官方免费电影资源入口")
     ms.add_argument("--json", action="store_true", help="给 agent 输出 JSON")
@@ -2364,7 +2924,7 @@ def build_parser():
     mx.add_argument("--classify", action="store_true", default=None, help="按扩展名自动归档")
     mx.set_defaults(func=_lazy_cmd("pancli.search_movie", "cmd_movie"))
 
-    p_search = sub.add_parser("search", help="联网搜索资料/电影/视频/音乐候选，可一键下载")
+    p_search = sub.add_parser("search", help=("search web for documents/movies/videos/music candidates, one-command download" if lang == "en" else "联网搜索资料/电影/视频/音乐候选，可一键下载"))
     p_search.add_argument("query", nargs="?", default="", help="要搜索的关键词")
     p_search.add_argument("--kind", choices=SEARCH_KINDS, default="auto", help="候选类型：auto/movie/video/music/file")
     p_search.add_argument("--providers", default="auto", help="搜索源：auto/archive,duckduckgo,ytdlp")
@@ -2387,7 +2947,7 @@ def build_parser():
     p_search.add_argument("--classify", action="store_true", default=None, help="按扩展名自动归档")
     p_search.set_defaults(func=_lazy_cmd("pancli.search_movie", "cmd_search"))
 
-    p_crawl = sub.add_parser("crawl", help="网络爬虫：抓取网页目录页里的媒体/文件/磁力候选并一键下载")
+    p_crawl = sub.add_parser("crawl", help=("crawler: harvest media/file/magnet candidates from directory pages" if lang == "en" else "网络爬虫：抓取网页目录页里的媒体/文件/磁力候选并一键下载"))
     p_crawl.add_argument("url", nargs="?", help="要抓取的网页 URL（可含 HTTP/FTP/HTTPS 页面）")
     p_crawl.add_argument("--kind", choices=SEARCH_KINDS, default="auto", help="候选类型：auto/movie/video/music/file")
     p_crawl.add_argument("--limit", type=int, default=20, help="最多候选数（默认 20）")
@@ -2408,13 +2968,13 @@ def build_parser():
     p_crawl.add_argument("--classify", action="store_true", default=None, help="按扩展名自动归档")
     p_crawl.set_defaults(func=_lazy_cmd("pancli.search_movie", "cmd_crawl"))
 
-    p_docker = sub.add_parser("docker", help="生成/检查 Docker/NAS 运行文件（不执行系统安装）")
+    p_docker = sub.add_parser("docker", help=("generate/check Docker/NAS run files (no system install)" if lang == "en" else "生成/检查 Docker/NAS 运行文件（不执行系统安装）"))
     p_docker.add_argument("docker_cmd", nargs="?", default="files", help="files（默认）：生成 Docker 文件；check：检测 docker 可用性并校验文件")
     p_docker.add_argument("--out", help="输出目录（默认 技能根目录/docker）")
     p_docker.add_argument("--json", action="store_true", help="给 agent 输出 JSON")
     p_docker.set_defaults(func=_lazy_cmd("pancli.docker", "cmd_docker"))
 
-    p_probe = sub.add_parser("probe", help="对多个候选直链真实测速，推荐最快（默认各取前约 200KB）")
+    p_probe = sub.add_parser("probe", help=("probe multiple candidate direct links and recommend fastest" if lang == "en" else "对多个候选直链真实测速，推荐最快（默认各取前约 200KB）"))
     p_probe.add_argument("url", nargs="?", help="第一个候选链接")
     p_probe.add_argument("--candidates", help="逗号分隔的其余候选链接")
     p_probe.add_argument("--timeout", type=int, default=6)
@@ -2422,7 +2982,7 @@ def build_parser():
     p_probe.add_argument("--json", action="store_true", help="给 agent 输出 JSON")
     p_probe.set_defaults(func=_lazy_cmd("pancli.docker", "cmd_probe"))
 
-    p_get = sub.add_parser("get", help="下载分享链接或直链")
+    p_get = sub.add_parser("get", help=("download a share link or direct link" if lang == "en" else "下载分享链接或直链"))
     p_get.add_argument("url")
     p_get.add_argument("--pwd", help="分享提取码")
     p_get.add_argument("--at", dest="at", default="", help="定时/低峰：HH:MM（如 --at 02:30），到点再开始下载；over 当前时间则立即用配置默认")
@@ -2436,6 +2996,7 @@ def build_parser():
     p_get.add_argument("--json", action="store_true", help="给 agent 输出无凭据 JSON")
     p_get.add_argument("--events", action="store_true", help="实际下载时输出逐步 JSON 事件")
     p_get.add_argument("--live", action="store_true", help="写入实时速度状态文件（下载速度.live.json），可在 serve 页面查看")
+    p_get.add_argument("--no-web", dest="no_web", action="store_true", help="本次下载不自动启动/打开 Web UI")
     p_get.add_argument("--split", type=int, default=0, help="http 直链单文件 Range 分片并发数（默认0=关闭，仅对支持 Range 的直链生效）")
     p_get.add_argument("--classify", action="store_true", default=None, help="按扩展名自动归档到 影视/音乐/文档/图片/压缩包/其他（覆盖 smart.auto_classify，未开启时可手动启用）")
     p_get.add_argument("--generic-direct", action="store_true",
@@ -2565,6 +3126,37 @@ def build_parser():
     mg.add_argument("--json", action="store_true")
     mg.set_defaults(func=_lazy_cmd("pancli.setup", "cmd_mcp_guide"))
 
+    p_guard = sub.add_parser("guard", help="单实例锁 / 后台守护 / 限速与 ETA 预估")
+    p_guard.add_argument("action", nargs="?", default="status",
+                         choices=["status", "locks", "clean", "speed", "eta", "daemon", "error"])
+    p_guard.add_argument("--drive", default="", help="网盘 key，如 baidu")
+    p_guard.add_argument("--source", default="", help="远端来源路径（当前仅用于展示）")
+    p_guard.add_argument("--target", default="", help="下载目录（speed 采样用）")
+    p_guard.add_argument("--seconds", type=int, default=20, help="吞吐采样秒数")
+    p_guard.add_argument("--total", type=float, default=0, help="eta：总字节数")
+    p_guard.add_argument("--bps", type=float, default=0, help="eta：每秒字节数")
+    p_guard.add_argument("--cmd", default="", help="daemon：要后台执行的命令")
+    p_guard.add_argument("--log", default="", help="daemon：日志文件")
+    p_guard.add_argument("--text", default="", help="error：要归类的错误文本")
+    p_guard.add_argument("--json", action="store_true")
+    p_guard.set_defaults(func=_lazy_cmd("pancli.guard", "cmd_guard"))
+
+    p_live = sub.add_parser("live", help="实时进度：把外部 BaiduPCS-Go 日志接入 Web UI")
+    p_live_sub = p_live.add_subparsers(dest="live_cmd")
+    p_live_attach = p_live_sub.add_parser("attach", help="接入 BaiduPCS-Go 下载日志并持续写入实时状态")
+    p_live_attach.add_argument("--log", required=True, help="BaiduPCS-Go 下载日志路径")
+    p_live_attach.add_argument("--target", required=True, help="实际下载目录（Web UI 下载位置）")
+    p_live_attach.add_argument("--total-bytes", type=int, default=0, help="分享总字节数；不填则只显示当前分片批次")
+    p_live_attach.add_argument("--files-total", type=int, default=0, help="分享文件总数")
+    p_live_attach.add_argument("--url", default="", help="分享链接（会自动脱敏提取码）")
+    p_live_attach.add_argument("--pid", type=int, default=0, help="BaiduPCS-Go 进程 PID；进程退出后自动结束监控")
+    p_live_attach.add_argument("--interval", type=float, default=1.0, help="采样间隔秒（默认 1.0）")
+    p_live_attach.add_argument("--state-dir", default="", help="Web UI 状态目录；需与 pan serve --reports-dir 一致")
+    p_live_attach.add_argument("--once", action="store_true", help="只写一次状态后退出，适合测试")
+    p_live_attach.add_argument("--open", action="store_true", help="自动启动/复用 Web UI 并打开 /live")
+    p_live_attach.add_argument("--json", action="store_true", help="输出实时状态 JSON")
+    p_live_attach.set_defaults(func=_lazy_cmd("pancli.report", "cmd_live_attach"))
+
     p_serve = sub.add_parser("serve", help="只读本地状态页（默认 127.0.0.1:17890）")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=17890)
@@ -2574,9 +3166,12 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    lang = i18n.argv_lang(raw)
+    parser = build_parser(lang=lang)
+    args = parser.parse_args(raw)
     if not getattr(args, "func", None):
-        build_parser().print_help()
+        parser.print_help()
         return 0
     return args.func(args)
 
