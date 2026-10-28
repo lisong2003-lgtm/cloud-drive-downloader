@@ -2295,6 +2295,63 @@ def resolve_split_count(cfg, args):
     return 0
 
 
+def auto_split_decision(url, cfg=None, sample_bytes=1048576):
+    """F1（v0.20.0）：单连接慢且支持 Range 时自动返回分片数，否则返回 (0, 原因)。
+
+    决策口径（§四F1）：
+      1. http.auto_split 关闭 → (0, "disabled")
+      2. Range 不支持 / 文件 < 4MB → (0, 原因)（小文件分片得不偿失）
+      3. 样本测速 ≥ auto_split_threshold_kbps（默认 1024）→ (0, "fast_enough")
+      4. 否则返回 split_max_concurrency（默认 4）作为分片数。
+    只做样本测速 + 阈值判断，不是"智能限速"；账号级限速此路也绕不开，
+    只对"单连接被限、多连接放开"的服务器有效。
+    """
+    cfg = cfg or load_config()
+    http = cfg.get("http") or {}
+
+    def _int(key, default):
+        try:
+            v = int(http.get(key, default))
+            return v if v > 0 else default
+        except (TypeError, ValueError):
+            return default
+
+    if not http.get("auto_split", True):
+        return 0, "disabled"
+    length, accept_ranges = probe_http_range(url)
+    if not length or not accept_ranges:
+        return 0, "range_unsupported"
+    if length < 4 * 1024 * 1024:
+        return 0, "file_too_small"
+
+    threshold = _int("auto_split_threshold_kbps", 1024)
+    import time as _time
+    tmp = tempfile.NamedTemporaryFile(prefix="pan-autosplit-", delete=False, suffix=".bin")
+    tmp.close()
+    probe = Path(tmp.name)
+    issued = _time.time()
+    argv = ["curl", "-sS", "-L", "--max-time", "20",
+            "-r", "0-%d" % (sample_bytes - 1), "-o", str(probe), url]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=23)
+        elapsed = max(_time.time() - issued, 0.001)
+        size = probe.stat().st_size if probe.exists() else 0
+    except (OSError, subprocess.TimeoutExpired):
+        size, elapsed = 0, 1.0
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+    if size < sample_bytes:
+        # 样本都没拉全：要么链接已失效要么慢到没救，交给上层走整文件重试逻辑。
+        return 0, "probe_incomplete"
+    kbps = (size * 8.0 / 1024.0) / elapsed
+    if kbps >= threshold:
+        return 0, "fast_enough(%.0fkbps>=%d)" % (kbps, threshold)
+    return _int("split_max_concurrency", 4), "slow_single_conn(%.0fkbps<%d)" % (kbps, threshold)
+
+
 def probe_http_range(url, timeout=15):
     try:
         proc = subprocess.run(["curl", "-sI", "-L", "--max-time", str(timeout), url],
@@ -3073,6 +3130,25 @@ def build_parser(lang="zh"):
     p_dirs.add_argument("--json", action="store_true", help="输出 JSON")
     p_dirs.set_defaults(func=_lazy_cmd("pancli.carriers", "cmd_dirs"))
 
+    p_idle = sub.add_parser("idle", help="闲时下载队列（add/list/delete/run；窗口默认 00:00-08:00）")
+    idle_sub = p_idle.add_subparsers(dest="idle_cmd")
+    ia = idle_sub.add_parser("add", help="把一个下载链接排入闲时队列")
+    ia.add_argument("url")
+    ia.add_argument("pass_through", nargs=argparse.REMAINDER,
+                    help="透传给 pan get 的参数（如 -- --to /path --split 4）")
+    ia.set_defaults(func=_lazy_cmd("pancli.idle", "cmd_idle"))
+    idl = idle_sub.add_parser("list", help="查看闲时队列")
+    idl.add_argument("--json", action="store_true")
+    idl.set_defaults(func=_lazy_cmd("pancli.idle", "cmd_idle"))
+    idd = idle_sub.add_parser("delete", help="删除队列任务")
+    idd.add_argument("id")
+    idd.set_defaults(func=_lazy_cmd("pancli.idle", "cmd_idle"))
+    idr = idle_sub.add_parser("run", help="启动 idle-daemon（前台常驻；--once 单轮；--print-crontab 只打印不安装）")
+    idr.add_argument("--once", action="store_true", help="只投递一轮（自测/手动触发）")
+    idr.add_argument("--print-crontab", dest="print_crontab", action="store_true",
+                     help="打印现成 cron 条目，不自动安装（红线）")
+    idr.set_defaults(func=_lazy_cmd("pancli.idle", "cmd_idle"))
+
     p_task = sub.add_parser("task", help="任务控制（list/show/pause/resume/delete/retry）")
     p_task.add_argument("--json", action="store_true", help="输出 JSON")
     p_task.add_argument("--reports-dir", default="", help="报告目录（默认读配置 http.report_dir/live_dir）")
@@ -3157,7 +3233,7 @@ def build_parser(lang="zh"):
     p_live_attach.add_argument("--json", action="store_true", help="输出实时状态 JSON")
     p_live_attach.set_defaults(func=_lazy_cmd("pancli.report", "cmd_live_attach"))
 
-    p_serve = sub.add_parser("serve", help="只读本地状态页（默认 127.0.0.1:17890）")
+    p_serve = sub.add_parser("serve", help="Web 控制台（任务投递/设置等写接口，token 鉴权；默认 127.0.0.1:17890）")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=17890)
     p_serve.add_argument("--reports-dir", default="", help="报告目录（默认读配置 http.report_dir）")

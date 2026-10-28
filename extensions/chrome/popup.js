@@ -1,10 +1,12 @@
 async function BASE() { const d = await chrome.storage.local.get("serverUrl"); const u = (d.serverUrl || "").trim(); return u ? u.replace(/\/$/, "") : "http://127.0.0.1:17890"; }
+async function AUTH() { const d = await chrome.storage.local.get("apiToken"); const t = (d.apiToken || "").trim(); return t ? { "Authorization": "Bearer " + t } : {}; }
 
 const $ = (id) => document.getElementById(id);
 
 async function main() {
-  const d = await chrome.storage.local.get("serverUrl");
+  const d = await chrome.storage.local.get(["serverUrl", "apiToken"]);
   $("serverUrl").value = d.serverUrl || "http://127.0.0.1:17890";
+  $("apiToken").value = d.apiToken || "";
   const capState = await chrome.storage.local.get({ captureDownloads: true });
   $("captureDownloads").checked = capState.captureDownloads;
   $("captureDownloads").addEventListener("change", async () => {
@@ -12,7 +14,7 @@ async function main() {
   });
   $("saveServer").addEventListener("click", async () => {
     const serverUrl = $("serverUrl").value.trim().replace(/\/$/, "");
-    await chrome.storage.local.set({ serverUrl });
+    await chrome.storage.local.set({ serverUrl, apiToken: $("apiToken").value.trim() });
     $("serverMsg").textContent = "✅ 已保存";
     setTimeout(() => $("serverMsg").textContent = "", 1600);
   });
@@ -23,7 +25,7 @@ async function main() {
     const tpwd = ($("tpwd").value || "").trim();
     if (tpwd) qs.append("pwd", tpwd);
     try {
-      const resp = await fetch(await BASE() + "/api/test?" + qs.toString());
+      const resp = await fetch(await BASE() + "/api/test?" + qs.toString(), { headers: await AUTH() });
       const data = await resp.json();
       if (!data || !data.checks) { $("tres").innerHTML = "<span class='err'>测试失败：" + ((data && data.error) || "未知") + "</span>"; return; }
       let html = "";
@@ -52,7 +54,7 @@ async function main() {
     try {
       const resp = await fetch(await BASE() + "/api/download", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: Object.assign({ "Content-Type": "application/json" }, await AUTH()),
         body: JSON.stringify(body)
       });
       const data = await resp.json();

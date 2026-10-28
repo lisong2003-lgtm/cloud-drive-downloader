@@ -1,5 +1,12 @@
 // 后台 service worker：投递到用户配置的任意网盘通服务
 async function getBase() { const d = await chrome.storage.local.get("serverUrl"); const u = (d.serverUrl || "").trim(); return u ? u.replace(/\/$/, "") : "http://127.0.0.1:17890"; }
+// v0.19.0 起 Web API 启用 token 鉴权：在扩展选项里填入服务端 token
+// （服务端启动横幅打印：pan serve → "带 token 入口"）
+async function getAuthHeaders() {
+  const d = await chrome.storage.local.get("apiToken");
+  const t = (d.apiToken || "").trim();
+  return t ? { "Authorization": "Bearer " + t } : {};
+}
 const MENU_ID = "pan-dl-send";
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -39,7 +46,7 @@ async function sendToPan(url, opts) {
   if (opts.path) body.path = opts.path;
   const resp = await fetch(await getBase() + "/api/download", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: Object.assign({ "Content-Type": "application/json" }, await getAuthHeaders()),
     body: JSON.stringify(body)
   });
   return await resp.json();

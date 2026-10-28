@@ -8,7 +8,7 @@
 ## 三类入口
 
 - **Agent / MCP / CLI**：`scripts/pan.py route --brief` 一次完成链接识别/登录门禁/预检并省 token，`scripts/pan.py get` 执行下载；无服务模式可直接调用，也可通过 `scripts/pan_mcp.py` 接入 Codex 或通用 MCP 客户端。
-- **Web UI**：`python3 scripts/pan.py serve` 后访问 `http://127.0.0.1:<port>`；登录/授权走 `/login`，零客户端桥走 `/engines`，进度走 `/live`；NAS/服务器模式访问 `http://<nas>:<port>` 或 `http://<server>:<port>`。
+- **Web UI**：`bash scripts/pan.sh serve` 后访问 `http://127.0.0.1:<port>`；登录/授权走 `/login`，零客户端桥走 `/engines`，进度走 `/live`；NAS/服务器模式访问 `http://<nas>:<port>` 或 `http://<server>:<port>`。
 - **浏览器插件**：加载 `extensions/chrome/`，支持 Chrome 与 Edge，可投递到本机、NAS 或服务器地址。
 
 ## 能力
@@ -27,11 +27,11 @@
 ## 单实例、续传与失败诊断（v0.16.0）
 
 - 同一 `(网盘, 来源, 目标目录)` 只允许一个下载进程；抢不到锁会直接返回退出码 `9`，不会继续覆盖断点。
-- 查看/清理锁：`python3 scripts/pan.py guard status`、`python3 scripts/pan.py guard clean`。
+- 查看/清理锁：`bash scripts/pan.sh guard status`、`bash scripts/pan.sh guard clean`。
 - 续传不要加 `--ow`；计划构建阶段会自动剥离，并补 `--retry 5`。
-- 后台任务使用双 fork：`python3 scripts/pan.py guard daemon --cmd '<命令>' --log <日志路径>`，不要用 `nohup ... &`。
-- 低速度先用 `python3 scripts/pan.py guard speed --target <目录> --seconds 20` 采样；低于 200 KB/s 会提示网盘侧限速/免费账号特征，不混同登录失败。
-- 错误先用 `python3 scripts/pan.py guard error --text '<原始错误>'` 归类，再按返回的 `remediation` 处理。
+- 后台任务使用双 fork：`bash scripts/pan.sh guard daemon --cmd '<命令>' --log <日志路径>`，不要用 `nohup ... &`。
+- 低速度先用 `bash scripts/pan.sh guard speed --target <目录> --seconds 20` 采样；低于 200 KB/s 会提示网盘侧限速/免费账号特征，不混同登录失败。
+- 错误先用 `bash scripts/pan.sh guard error --text '<原始错误>'` 归类，再按返回的 `remediation` 处理。
 
 
 ## 支持边界（v0.18.9）

@@ -36,6 +36,7 @@ except Exception:
 
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -59,12 +60,15 @@ def extract_pwd(text: str):
     return m.group(1) if m else ""
 
 
-def forward_download(url: str, pwd: str, target: str, timeout: float = 30.0):
+def forward_download(url: str, pwd: str, target: str, timeout: float = 30.0, token: str = ""):
     """把链接投递到 pan serve 的 POST /api/download；成功返回 (ok, info)。"""
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if token:
+        # v0.19.0 起 pan serve 的 API 需要 token 鉴权
+        headers["Authorization"] = "Bearer " + token
     payload = json.dumps({"url": url, "pwd": pwd or ""}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(target.rstrip("/") + "/api/download",
-                                 data=payload, method="POST",
-                                 headers={"Content-Type": "application/json; charset=utf-8"})
+                                 data=payload, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = (resp.read() or b"{}").decode("utf-8", "replace")
@@ -74,7 +78,7 @@ def forward_download(url: str, pwd: str, target: str, timeout: float = 30.0):
         return False, {"error": "转发下载失败：%s" % exc}
 
 
-def handle_event(body: dict, target: str):
+def handle_event(body: dict, target: str, token: str = ""):
     """处理飞书事件 JSON。返回 (handled, response_json_or_None, messages)。
 
     - url_verification 校验：原样回 challenge。
@@ -105,7 +109,7 @@ def handle_event(body: dict, target: str):
 
     msgs = []
     for url in urls:
-        ok, info = forward_download(url, extract_pwd(text), target)
+        ok, info = forward_download(url, extract_pwd(text), target, token=token)
         msgs.append(("✅ 已开始下载：%s\n%s" % (url, json.dumps(info, ensure_ascii=False)))
                     if ok else ("❌ %s" % info.get("error", "下载启动失败")))
     return True, None, msgs
@@ -113,6 +117,7 @@ def handle_event(body: dict, target: str):
 
 class FeishuHandler(BaseHTTPRequestHandler):
     target = DEFAULT_TARGET
+    verify_token = ""  # 飞书开放平台"事件订阅"页的 Verification Token；非空时校验 body.token
 
     def log_message(self, *args):  # 关闭默认访问日志（由业务逻辑打印）
         pass
@@ -135,7 +140,11 @@ class FeishuHandler(BaseHTTPRequestHandler):
             body = json.loads(raw.decode("utf-8") or "{}")
         except (ValueError, UnicodeDecodeError):
             body = {}
-        handled, resp, msgs = handle_event(body, self.target)
+        if self.verify_token and str(body.get("token") or "") != self.verify_token:
+            print("❌ 回调 token 校验失败，已拒绝（来自 %s）" % (self.client_address[0] if self.client_address else "?"), flush=True)
+            self._reply(403, {"ok": False, "error": "invalid token"})
+            return
+        handled, resp, msgs = handle_event(body, self.target, token=self._pan_token)
         for m in msgs:
             print(m, flush=True)
         if resp is not None:
@@ -144,10 +153,18 @@ class FeishuHandler(BaseHTTPRequestHandler):
         self._reply(200, {"ok": handled})
 
 
-def run_server(host: str, port: int, target: str):
+def run_server(host: str, port: int, target: str, verify_token: str = "", pan_token: str = ""):
+    loopback = host in ("127.0.0.1", "localhost", "::1")
+    if not loopback and not verify_token:
+        # 安全修复：非回环暴露必须先配 Verification Token，否则任何人都能借你的 pan 投递下载
+        print("❌ 拒绝启动：--host 为非回环地址时必须提供 --feishu-verify-token（飞书开放平台-事件订阅-Verification Token）")
+        return 2
     server = ThreadingHTTPServer((host, port), FeishuHandler)
     FeishuHandler.target = target
+    FeishuHandler.verify_token = verify_token
+    FeishuHandler._pan_token = pan_token
     print("飞书桥已启动：监听 %s:%d，转发目标 %s" % (host, port, target), flush=True)
+    print("回调鉴权：%s；pan token 转发：%s" % ("已启用 Verification Token" if verify_token else "未配置（仅建议回环使用）", "已启用" if pan_token else "未配置"), flush=True)
     print("飞书回调地址：http://%s:%d/feishu/callback" % (host, port), flush=True)
     try:
         server.serve_forever()
@@ -177,10 +194,14 @@ def main(argv=None):
     ap.add_argument("--host", default="127.0.0.1", help="回调服务监听地址（默认 127.0.0.1）")
     ap.add_argument("--port", type=int, default=9001, help="回调服务端口（默认 9001）")
     ap.add_argument("--target", default=DEFAULT_TARGET, help="pan serve 地址（默认 http://127.0.0.1:17890）")
+    ap.add_argument("--feishu-verify-token", default=os.environ.get("FEISHU_VERIFY_TOKEN", ""),
+                    help="飞书 Verification Token（非回环监听时必填；也可用环境变量 FEISHU_VERIFY_TOKEN）")
+    ap.add_argument("--pan-token", default=os.environ.get("PAN_WEB_TOKEN", ""),
+                    help="pan serve 的 API token（v0.19.0 起需要；也可用环境变量 PAN_WEB_TOKEN）")
     args = ap.parse_args(argv)
     if args.check:
         return self_check()
-    return run_server(args.host, args.port, args.target)
+    return run_server(args.host, args.port, args.target, args.feishu_verify_token, args.pan_token)
 
 
 if __name__ == "__main__":

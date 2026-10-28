@@ -655,7 +655,8 @@ a{color:var(--acc)}
 
 <div class=card><h3>常见问题</h3>
 <p><b>「提示登录过期」怎么办？</b> 部分网盘首次要官方扫码或网页登录一次，这是官方要求，工具不会绕过。</p>
-<p><b>下载会更快吗？</b> 免费档按网盘官方限速执行，不能承诺更快；会员走本机并发调度。</p>
+<p><b>下载会更快吗？</b> 免费档按网盘官方限速执行，不能承诺更快；会员走本机并发调度。想提速看下一条。</p>
+<p><b>非会员怎么提速？</b> 三招：①换赛道——让分享方用 123 云盘/夸克离线（见教程 <code>references/42-换赛道提速指南.md</code>）；②http 直链单连接被限时会自动切分片（v0.20.0）；③深夜下载用 <code>pan idle add &lt;链接&gt;</code> 排闲时队列（默认 0-8 点自动跑）。</p>
 <p><b>密码安全吗？</b> 账号/Cookie/OAuth 凭据只存系统钥匙串，不存明文、不进聊天记录、不上传云端。</p>
 <p><b>下载到哪了？</b> 默认 <code>下载 / Downloads/网盘下载</code>；可在「目标目录」填写 NAS、U盘等路径。</p>
 <p><b>卡在某个网盘不会用？</b> 先用「测试连接」，再按它的建议补配置即可。</p>
@@ -855,8 +856,8 @@ def serve_settings_html():
 <meta name=viewport content="width=device-width,initial-scale=1"><title>网盘通 · 设置</title>
 <style>:root{--bg:#0b1120;--panel:#111827;--line:#243244;--text:#e5edf8;--muted:#94a3b8;--acc:#38bdf8}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,PingFang SC,system-ui,sans-serif}.w{max-width:820px;margin:auto;padding:20px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}input,select{width:100%;padding:10px;border-radius:8px;border:1px solid var(--line);background:#020617;color:var(--text);margin-bottom:10px}button{width:100%;border:0;border-radius:8px;background:var(--acc);color:#06283d;font-weight:700;padding:11px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}@media(max-width:640px){.grid{grid-template-columns:1fr}}a{color:var(--acc);text-decoration:none}.msg{margin-top:8px;color:var(--muted)}</style></head><body><div class=w>
 <h1>设置</h1><p><a href="/">← 返回控制台</a></p>
-<div class=panel><label>AList 地址</label><input id=alist placeholder="http://127.0.0.1:5244"><label>rclone 远端</label><input id=remote placeholder="alist:"><label>默认下载目录</label><input id=root placeholder="/data/download"><div class=grid><label>并发数</label><input id=conn type=number min=1 max=16 value=4><label>通知钩子</label><input id=hook placeholder="可留空"></div><button id=save>保存设置</button><div class=msg id=msg></div></div>
-<script>fetch('/api/settings').then(r=>r.json()).then(d=>{const c=d.config||{};const e=c.engines||{};alist.value=e.alist_url||'';remote.value=e.rclone_remote||'';root.value=c.download_root||'';conn.value=(c.http||{}).max_connections_vip||4;hook.value=(c.http||{}).on_complete_hook||''});save.onclick=async()=>{save.disabled=1;msg.textContent='保存中…';try{const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alist_url:alist.value,rclone_remote:remote.value,download_root:root.value,max_connections:Number(conn.value)||4,on_complete_hook:hook.value})});const j=await r.json();msg.textContent=j.ok?'✅ 已保存':'❌ '+(j.error||'失败')}catch(e){msg.textContent='❌ '+e}save.disabled=0};</script></div></body></html>"""
+<div class=panel><label>AList 地址</label><input id=alist placeholder="http://127.0.0.1:5244"><label>rclone 远端</label><input id=remote placeholder="alist:"><label>默认下载目录</label><input id=root placeholder="/data/download"><div class=grid><label>并发数</label><input id=conn type=number min=1 max=16 value=4><label>通知钩子</label><input id=hook placeholder="可留空"></div><div class=grid><label>闲时窗口开始（HH:MM，配合 pan idle 用）</label><input id=idle_start type=time value="00:00"><label>闲时窗口结束</label><input id=idle_end type=time value="08:00"></div><button id=save>保存设置</button><div class=msg id=msg></div></div>
+<script>fetch('/api/settings').then(r=>r.json()).then(d=>{const c=d.config||{};const e=c.engines||{};alist.value=e.alist_url||'';remote.value=e.rclone_remote||'';root.value=c.download_root||'';conn.value=(c.http||{}).max_connections_vip||4;hook.value=(c.http||{}).on_complete_hook||'';const w=(c.http||{}).idle_window||['00:00','08:00'];idle_start.value=w[0];idle_end.value=w[1]});save.onclick=async()=>{save.disabled=1;msg.textContent='保存中…';try{const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alist_url:alist.value,rclone_remote:remote.value,download_root:root.value,max_connections:Number(conn.value)||4,on_complete_hook:hook.value,idle_start:idle_start.value,idle_end:idle_end.value})});const j=await r.json();msg.textContent=j.ok?'✅ 已保存':'❌ '+(j.error||'失败')}catch(e){msg.textContent='❌ '+e}save.disabled=0};</script></div></body></html>"""
 
 
 def serve_engines_html(url=""):
@@ -1096,13 +1097,87 @@ def cmd_serve(args):
         print("❌ 当前环境无 http.server")
         return 1
     import threading
+    import hmac as _hmac
+    import secrets as _secrets
     cfg = load_config()
     reports_dir = os.path.expanduser(args.reports_dir) if args.reports_dir else str(web_state_root(cfg))
     host, port = args.host, int(args.port)
 
+    # ---- 鉴权（修复：Web API 此前完全无鉴权，配合 --host 0.0.0.0 构成 LAN RCE 面）----
+    LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+    is_loopback = host in LOOPBACK
+    if not (cfg.get("web_auth_token") or "").strip():
+        cfg["web_auth_token"] = _secrets.token_urlsafe(24)
+        save_config(cfg)
+    token = cfg["web_auth_token"]
+    # PAN_NOAUTH=1 仅在回环绑定下允许关闭鉴权；非回环强制开启
+    auth_enabled = True if not is_loopback else os.environ.get("PAN_NOAUTH") != "1"
+    failed = {}  # ip -> [次数, 首次时间戳]；连败 10 次拉黑 5 分钟
+
+    def _token_ok(provided: str) -> bool:
+        return bool(provided) and _hmac.compare_digest(str(provided), token)
+
+    def _client_allowed(ip: str) -> bool:
+        import time as _time
+        rec = failed.get(ip)
+        if not rec:
+            return True
+        if _time.time() - rec[1] > 300:
+            failed.pop(ip, None)
+            return True
+        return rec[0] < 10
+
+    def _record_fail(ip: str) -> None:
+        import time as _time
+        rec = failed.get(ip)
+        if rec and _time.time() - rec[1] <= 300:
+            rec[0] += 1
+        else:
+            failed[ip] = [1, _time.time()]
+
+    _TOKEN_SCRIPT = (
+        '<script>(function(){var T=%r;var of=window.fetch;'
+        'window.fetch=function(u,o){try{if(typeof u==="string"&&u.indexOf("/api/")===0)'
+        '{u=u+(u.indexOf("?")>=0?"&":"?")+"token="+encodeURIComponent(T)}}catch(e){}'
+        'return of(u,o)}})();</script>'
+    ) % token
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
+
+        def _ip(self):
+            return self.client_address[0] if self.client_address else "?"
+
+        def _reject_auth(self):
+            ip = self._ip()
+            if not _client_allowed(ip):
+                self.send_error(403, "temporarily blocked")
+                return
+            _record_fail(ip)
+            try:
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("WWW-Authenticate", 'Bearer realm="pan"')
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": "unauthorized"}).encode("utf-8"))
+            except OSError:
+                pass
+
+        def _authed(self) -> bool:
+            """校验 Authorization: Bearer <token> 或 ?token=<token>。"""
+            if not auth_enabled:
+                return True
+            q = urlparse(self.path).query
+            provided = ""
+            if q:
+                provided = (dict(parse_qs(q)).get("token") or [""])[0]
+            if not provided:
+                provided = (self.headers.get("Authorization") or "").replace("Bearer ", "", 1).strip()
+            if _token_ok(provided):
+                return True
+            self._reject_auth()
+            return False
 
         def _json(self, obj):
             data = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
@@ -1113,6 +1188,9 @@ def cmd_serve(args):
             self.wfile.write(data)
 
         def _html(self, text):
+            if auth_enabled and "<script>" in text:
+                # 注入 fetch 包装：页面内所有 /api/ 请求自动带上 token
+                text = text.replace("<script>", _TOKEN_SCRIPT + "<script>", 1)
             data = text.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1128,6 +1206,8 @@ def cmd_serve(args):
             self.wfile.write(data)
 
         def do_POST(self):
+            if not self._authed():
+                return
             length = int(self.headers.get("Content-Length", 0) or 0)
             raw = b""
             if length:
@@ -1199,9 +1279,25 @@ def cmd_serve(args):
                 cfg.setdefault("engines", {})["rclone_remote"] = str(body.get("rclone_remote") or "").strip()
                 cfg["download_root"] = str(body.get("download_root") or "").strip()
                 cfg.setdefault("http", {})["max_connections_vip"] = max(1, min(16, int(body.get("max_connections") or 4)))
-                cfg["http"]["on_complete_hook"] = str(body.get("on_complete_hook") or "").strip()
+                # F2（v0.20.0）：闲时窗口，格式 HH:MM，跨午夜允许（如 22:00-06:00）
+                idle_win = []
+                for key in ("idle_start", "idle_end"):
+                    v = str(body.get(key) or "").strip()
+                    if v and len(v.split(":")) == 2 and all(x.isdigit() for x in v.split(":")):
+                        idle_win.append("%02d:%02d" % (int(v.split(":")[0]) % 24, int(v.split(":")[1]) % 60))
+                if len(idle_win) == 2:
+                    cfg.setdefault("http", {})["idle_window"] = idle_win
+                elif idle_win:
+                    self._json({"ok": False, "error": "闲时窗口需要同时填开始和结束（HH:MM）"})
+                    return
+                hook_warn = ""
+                if body.get("on_complete_hook"):
+                    # 安全修复：on_complete_hook 会在下载完成后被执行（report.run_completion_hook），
+                    # 不允许经 Web API 写入；如需使用请手工编辑配置文件并配置 hook_whitelist。
+                    hook_warn = "on_complete_hook 出于安全考虑不接受 Web 修改，请手工编辑配置文件"
                 save_config(cfg)
-                self._json({"ok": True, "message": "设置已保存"})
+                self._json({"ok": True, "message": "设置已保存" if not hook_warn else "设置已保存；" + hook_warn,
+                            "warning": hook_warn})
             elif self.path.startswith("/api/task/action"):
                 q = dict(parse_qs(self.path.split("?", 1)[1])) if "?" in self.path else {}
                 action = (body.get("action") or q.get("action") or [""])
@@ -1219,6 +1315,8 @@ def cmd_serve(args):
                 self.send_error(404, "Not Found")
 
         def do_GET(self):
+            if self.path.startswith("/api/") and not self._authed():
+                return
             if self.path in ("/manifest.webmanifest", "/manifest.json"):
                 self._raw(pwa_manifest_json().encode("utf-8"), "application/manifest+json; charset=utf-8")
             elif self.path in ("/bookmarklet.js", "/bookmarklet"):
@@ -1322,7 +1420,14 @@ def cmd_serve(args):
     except OSError as exc:
         print("❌ 启动失败 %s:%s：%s" % (host, port, exc))
         return 1
-    print("只读状态页：http://%s:%s/（仅本机访问；不读取任何凭据）" % (host, port))
+    print("Web 控制台：http://%s:%s/（含任务投递/设置等写接口，已启用 token 鉴权）" % (host, port), flush=True)
+    if auth_enabled:
+        print("鉴权已启用：API 请求需携带 token（Authorization: Bearer <token> 或 ?token=…）", flush=True)
+        print("带 token 入口：http://%s:%s/?token=%s" % (host, port, token), flush=True)
+        if not is_loopback:
+            print("⚠️ 监听在非回环地址 %s：token 强制启用；on_complete_hook 禁止经 Web 修改" % host, flush=True)
+    else:
+        print("⚠️ PAN_NOAUTH=1：鉴权已关闭（仅回环绑定允许）。请勿在此模式下暴露到局域网。", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

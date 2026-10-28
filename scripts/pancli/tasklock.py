@@ -65,29 +65,10 @@ def lock_key(drive: str, source: str, target: str) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _win_pid_alive(pid: int) -> bool:
-    """Windows 下判断 pid 是否存活（ctypes，避免 os.kill 对不存在 pid 抛 OSError）。"""
-    import ctypes
-    from ctypes import wintypes
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
-    if not handle:
-        return False
-    try:
-        code = wintypes.DWORD()
-        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-        return bool(ok) and code.value == 259  # STILL_ACTIVE
-    finally:
-        kernel32.CloseHandle(handle)
-
-
 def pid_alive(pid: int) -> bool:
     """判断 pid 是否仍然存活。EPERM 说明进程存在但无权限发信号 → 仍算存活。"""
     if not pid or pid <= 0:
         return False
-    if os.name == "nt":
-        return _win_pid_alive(int(pid))
     try:
         os.kill(int(pid), 0)
     except ProcessLookupError:

@@ -35,13 +35,25 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/83.0.4103.116 Safari/537.36")
-QR_DEFAULT = "/tmp/pan-baidu-login-qr.png"
+# 安全修复：二维码含登录能力，改用系统临时目录 + 0600 权限，且跨平台（Windows 无 /tmp）
+QR_DEFAULT = str(Path(tempfile.gettempdir()) / "pan-baidu-login-qr.png")
+
+
+def _secure_qr_file(path: str) -> str:
+    """确保二维码文件权限 0600（POSIX）；Windows 忽略权限位。"""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return path
 
 
 def unique_qr_path(base=QR_DEFAULT):
@@ -112,6 +124,7 @@ def get_qrcode(qr_out):
         raise QRLoginError("二维码图片为空")
     with open(qr_out, "wb") as fh:
         fh.write(img)
+    _secure_qr_file(qr_out)
     return gid, str(data.get("sign") or "")
 
 

@@ -2,7 +2,7 @@
 name: cloud-drive-downloader
 slug: cloud-drive-downloader
 displayName: 网盘通
-version: 0.18.9
+version: 0.20.0
 platforms: [macos, windows, linux]
 author: lis
 license: CC-BY-NC-SA-4.0
@@ -236,6 +236,7 @@ python3 <pan-root>/scripts/pan.py docker check --json
 - 已登记网盘与四类非百度路由（官方网页会话桥/浏览器直链桥/AList/OAuth-WebDAV）见 `references/40-网盘支持矩阵.md`。
 - 各盘真机验证的最小授权方式见 `references/41-真机验证权限清单.md`；未授权前对应盘标记「待用户提供」，不虚报真机结果。
 - 未登记盘名一律标“不支持/需接入”，不得当作 HTTP 直链抓取分享页；接入流程见 `references/06-扩展新网盘.md`。
+- 非会员提速的诚实路径（换赛道 123 云盘/夸克/PikPak 离线 + 自动分片 + 闲时队列）见 `references/42-换赛道提速指南.md`；v0.20.0 起 http 直链单连接被限自动切分片，`pan idle` 提供闲时队列与守护。
 
 ## 权限边界
 

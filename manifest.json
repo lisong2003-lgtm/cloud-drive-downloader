@@ -1,6 +1,6 @@
 {
   "name": "cloud-drive-downloader",
-  "version": "0.18.9",
+  "version": "0.20.0",
   "author": "lis",
   "license": "CC-BY-NC-SA-4.0",
   "entry": "SKILL.md",
@@ -9,7 +9,6 @@
   },
   "scripts": [
     "scripts/clipboard_monitor.py",
-    "scripts/credentials.py",
     "scripts/feishu_bot.py",
     "scripts/hooks/post_media.sh",
     "scripts/http_downloader/__init__.py",
@@ -48,7 +47,6 @@
     "scripts/verify_real_env.py"
   ],
   "references": [
-    ".gitignore",
     "CHANGELOG.md",
     "LICENSE.md",
     "NOTICE.md",
@@ -110,5 +108,6 @@
     "macos",
     "windows",
     "linux"
-  ]
+  ],
+  "assets": []
 }

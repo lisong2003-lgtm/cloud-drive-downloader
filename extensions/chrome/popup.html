@@ -24,6 +24,8 @@
   <h1>多网盘统一下载</h1>
   <label>服务地址（本机/NAS/服务器）</label>
   <input id="serverUrl" placeholder="http://127.0.0.1:17890">
+  <label>API Token（v0.19.0 起服务端要求鉴权；启动横幅"带 token 入口"里可复制）</label>
+  <input id="apiToken" placeholder="粘贴 pan serve 打印的 token">
   <div class="row"><button id="saveServer" style="margin-top:0">保存地址</button><div id="serverMsg" style="align-self:center;font-size:11px"></div></div>
   <label>链接（可粘贴多个，取第一个）</label>
   <textarea id="url"></textarea>

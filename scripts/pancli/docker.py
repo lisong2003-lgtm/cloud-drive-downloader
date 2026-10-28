@@ -17,6 +17,7 @@ except Exception:
 
 
 import shutil
+import signal
 import subprocess
 import time
 from datetime import datetime
@@ -24,7 +25,7 @@ from pathlib import Path
 
 # 所有共享工具函数从 engine 懒加载（engine 在文件末尾 import 本模块，避免循环引用）。
 from pancli.engine import *  # noqa: F401,F403
-from pancli.report import _terminate_group, _wait_controlled  # noqa: F401
+from pancli.report import _signal_group, _terminate_group  # noqa: F401
 
 DOCKER_FILES = {
     "Dockerfile": (
@@ -245,7 +246,16 @@ def cmd_probe(args):
 
 
 def run_curl_split(url, target_path, split, cfg, emit_events=False, live=None, task_control=None):
-    """http 直链单文件 Range 分片并发下载；服务端不支持时返回 (None, [], 说明) 回退整文件。"""
+    """http 直链单文件 Range 分片下载；服务端不支持时返回 (None, [], 说明) 回退整文件。
+
+    v0.20.0（F1）三项增强：
+      - 并发池：同时在跑的分片数受 http.split_max_concurrency（默认 4）约束，
+        跑完一段补一段，不再 N 段一次性全起（避免触发服务端连接数风控）；
+      - 分片级复用：.partNN 已存在且字节数等于该段应有大小 → 直接跳过（segment_reuse）；
+        不完整则整段重下（curl 拒绝把 -C - 与 -r 组合，半成品续传不可行，故整段重下）；
+      - 单段重试：某段失败时单独重试 1 次（--retry 只管连接级错误）。
+    http.split_limit_rate 非空时透传 curl --limit-rate。
+    """
     length, accept_ranges = probe_http_range(url)
     if not length or not accept_ranges or length < 2:
         return None, [], "服务端不支持可探测的 Range/Content-Length，回退整文件下载"
@@ -256,64 +266,150 @@ def run_curl_split(url, target_path, split, cfg, emit_events=False, live=None, t
     timeout = int(http.get("connect_timeout", 30) or 30)
     retries = str(http.get("retries", 3))
     delay = str(http.get("retry_delay", 5))
+    try:
+        pool_size = max(1, int(http.get("split_max_concurrency", 4) or 4))
+    except (TypeError, ValueError):
+        pool_size = 4
+    limit_rate = str(http.get("split_limit_rate") or "").strip()
     base = length // n
-    procs = []
-    results = []
-    started = time.time()
+
+    # 计算各段区间与期望大小
+    segments = []  # (index, start, end, part_path, expected_size)
     for i in range(n):
         start = base * i
         end = (base * (i + 1) - 1) if i < n - 1 else (length - 1)
         part = Path(str(target_path) + ".part%02d" % i)
+        segments.append((i, start, end, part, end - start + 1))
+
+    def _emit(event):
+        if emit_events:
+            print(json.dumps(event, ensure_ascii=False), flush=True)
+
+    def _note_step(text):
+        if live is not None:
+            live.set_step(text)
+        if task_control is not None:
+            task_control.set_step(text)
+
+    def _argv(start, end, part):
         argv = ["curl", "-L", "--fail", "--retry", retries, "--retry-delay", delay,
                 "--connect-timeout", str(timeout), "-r", "%d-%d" % (start, end),
                 "-o", str(part), url]
-        entry = {"index": i + 1, "engine": "curl-split", "note": "Range %d-%d" % (start, end),
-                 "argv": mask_argv(argv), "uses_stdin_credential": False,
-                 "started": datetime.now().strftime("%Y-%m-%dT%H:%M:%S%z"),
-                 "rc": -1, "elapsed": 0.0, "error": ""}
-        results.append(entry)
-        if live is not None:
-            live.set_step(entry["note"])
-        if task_control is not None:
-            task_control.set_step(entry["note"])
-        if emit_events:
-            print(json.dumps({"event": "segment_start", "index": i + 1, "range": "%d-%d" % (start, end)}, ensure_ascii=False))
-        try:
-            proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                    start_new_session=bool(task_control is not None))
-        except OSError as exc:
-            entry["rc"] = 127
-            entry["error"] = str(exc)
-            return 127, results, "无法启动 curl：%s" % exc
-        procs.append((i, start, end, part, proc))
-    failed = None
+        if limit_rate:
+            argv[1:1] = ["--limit-rate", limit_rate]
+        return argv
+
+    results = {}
+    for i, start, end, part, expected in segments:
+        results[i] = {"index": i + 1, "engine": "curl-split", "note": "Range %d-%d" % (start, end),
+                      "argv": mask_argv(_argv(start, end, part)), "uses_stdin_credential": False,
+                      "started": datetime.now().strftime("%Y-%m-%dT%H:%M:%S%z"),
+                      "rc": -1, "elapsed": 0.0, "error": "", "reused": False}
+
+    started = time.time()
+    pending = list(segments)
+    running = []   # (i, start, end, part, proc)
     cancelled = False
-    for i, start, end, part, proc in procs:
+    paused = False
+    retried = set()
+    spawn_error = None
+
+    while (pending or running) and not cancelled:
+        # 任务级暂停：SIGSTOP 全部在跑段，恢复时 SIGCONT（不往池里补新段）
         if task_control is not None:
-            rc, status = _wait_controlled(proc, task_control)
-            if status == "cancelled":
+            state = task_control.read_state()
+            if state == "paused" and not paused:
+                paused = True
+                for _i, _s, _e, _p, _pr in running:
+                    if _pr.poll() is None:
+                        _signal_group(_pr, signal.SIGSTOP)
+            elif state != "paused" and paused:
+                paused = False
+                for _i, _s, _e, _p, _pr in running:
+                    if _pr.poll() is None:
+                        _signal_group(_pr, signal.SIGCONT)
+            if state == "cancelled":
                 cancelled = True
-                for _j, _s, _e, _p, _pr in procs:
+                for _i, _s, _e, _p, _pr in running:
                     if _pr.poll() is None:
                         _terminate_group(_pr)
                 break
-        else:
-            rc = proc.wait()
-        results[i]["rc"] = rc
-        results[i]["elapsed"] = round(time.time() - started, 2)
-        if emit_events:
-            print(json.dumps({"event": "segment_done", "index": i + 1, "range": "%d-%d" % (start, end), "rc": rc}, ensure_ascii=False))
-        if rc != 0 and failed is None:
-            failed = (i, rc)
+
+        # 填满并发池（复用检查在启动前：完整 .part 直接跳过）
+        if not paused:
+            while pending and len(running) < pool_size:
+                i, start, end, part, expected = pending.pop(0)
+                if part.exists() and part.stat().st_size == expected:
+                    results[i]["rc"] = 0
+                    results[i]["reused"] = True
+                    _emit({"event": "segment_reuse", "index": i + 1, "range": "%d-%d" % (start, end)})
+                    continue
+                if part.exists():
+                    # 半成品：curl 拒绝 -C - 与 -r 组合，无法段内续传，整段重下
+                    try:
+                        part.unlink()
+                    except OSError:
+                        pass
+                try:
+                    _note_step(results[i]["note"])
+                    _emit({"event": "segment_start", "index": i + 1, "range": "%d-%d" % (start, end)})
+                    proc = subprocess.Popen(_argv(start, end, part), stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL,
+                                            start_new_session=bool(task_control is not None))
+                except OSError as exc:
+                    results[i]["rc"] = 127
+                    results[i]["error"] = str(exc)
+                    spawn_error = "无法启动 curl：%s" % exc
+                    break
+                running.append((i, start, end, part, proc))
+            if spawn_error:
+                break
+
+        # 非阻塞轮询在跑的进程
+        still = []
+        for (i, start, end, part, proc) in running:
+            rc = proc.poll()
+            if rc is None:
+                still.append((i, start, end, part, proc))
+                continue
+            results[i]["rc"] = rc
+            results[i]["elapsed"] = round(time.time() - started, 2)
+            _emit({"event": "segment_done", "index": i + 1, "range": "%d-%d" % (start, end), "rc": rc})
+            size = part.stat().st_size if part.exists() else 0
+            if rc == 0 and size == end - start + 1:
+                continue  # 本段成功
+            # 失败段：单独重试一次
+            if i not in retried:
+                retried.add(i)
+                results[i]["error"] = "segment exit=%s size=%s，重试" % (rc, size)
+                pending.append((i, start, end, part, end - start + 1))
+            else:
+                results[i]["error"] = "segment exit=%s size=%s（重试后仍失败）" % (rc, size)
+        running = still
+        if not running and not pending:
+            break
+        time.sleep(0.2)
+
     if cancelled:
-        return 130, results, "任务已取消"
+        return 130, [results[i] for i in sorted(results)], "任务已取消"
+    if spawn_error:
+        return 127, [results[i] for i in sorted(results)], spawn_error
+
+    # 段完整性终检（复用段 rc 已置 0）
+    failed = None
+    for i, start, end, part, expected in segments:
+        size = part.stat().st_size if part.exists() else 0
+        if results[i]["rc"] != 0 or size != expected:
+            if failed is None:
+                failed = (i, results[i]["rc"], size, expected)
     if failed is not None:
-        i, rc = failed
-        results[i]["error"] = "segment exit=%s" % rc
-        return rc, results, "分片下载失败（第 %s 段 exit=%s）" % (i + 1, rc)
+        i, rc, size, expected = failed
+        return rc or 127, [results[i] for i in sorted(results)], \
+            "分片下载失败（第 %s 段 exit=%s size=%s expected=%s）" % (i + 1, rc, size, expected)
+
     try:
         with Path(target_path).open("wb") as out:
-            for i, start, end, part, proc in procs:
+            for i, start, end, part, expected in segments:
                 with part.open("rb") as pin:
                     shutil.copyfileobj(pin, out)
                 try:
@@ -321,11 +417,16 @@ def run_curl_split(url, target_path, split, cfg, emit_events=False, live=None, t
                 except OSError:
                     pass
     except OSError as exc:
-        return 127, results, "合并写文件失败：%s" % exc
+        return 127, [results[i] for i in sorted(results)], "合并写文件失败：%s" % exc
     size = Path(target_path).stat().st_size if Path(target_path).exists() else 0
     if size != length:
-        return 127, results, "合并字节数校验失败 expected=%s actual=%s" % (length, size)
-    return 0, results, "Range 分片下载完成（%sB，%s 段）" % (length, n)
+        return 127, [results[i] for i in sorted(results)], "合并字节数校验失败 expected=%s actual=%s" % (length, size)
+    reused_n = sum(1 for i in results if results[i].get("reused"))
+    note = "Range 分片下载完成（%sB，%s 段" % (length, n)
+    if reused_n:
+        note += "，复用 %d 段" % reused_n
+    note += "）"
+    return 0, [results[i] for i in sorted(results)], note
 
 
 

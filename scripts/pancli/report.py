@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import threading
@@ -128,6 +129,33 @@ def run_completion_hook(cfg, plan, report_path, url=""):
         target=target, drive=plan.get("drive", ""), engine=plan.get("engine", ""),
         report=report_path or "", url=url, tier=plan.get("tier", ""),
     ))
+    # 安全修复：钩子可执行任意命令，执行前必须通过白名单校验。
+    # cfg["http"]["hook_whitelist"] 为允许的目录列表（或 "-" 表示显式放行全部，不推荐）；
+    # 未配置白名单时一律拒绝执行并记日志。
+    whitelist = [str(x) for x in ((cfg.get("http") or {}).get("hook_whitelist") or [])]
+    exe = argv[0] if argv else ""
+    exe_path = Path(exe).expanduser()
+    allowed = False
+    if whitelist == ["-"]:
+        allowed = True  # 显式全放行（不推荐，仅本机完全可信环境）
+    elif exe_path.is_absolute() and exe_path.exists():
+        import sys as _sys
+        resolved = str(exe_path.resolve())
+        for d in whitelist:
+            try:
+                if resolved.startswith(str(Path(d).expanduser().resolve()) + os.sep) or resolved == str(Path(d).expanduser().resolve()):
+                    allowed = True
+                    break
+            except OSError:
+                continue
+        if not allowed and shutil.which(exe) and any(
+            str(Path(shutil.which(exe)).resolve()).startswith(str(Path(d).expanduser().resolve()) + os.sep)
+            for d in whitelist if Path(d).expanduser().exists()
+        ):
+            allowed = True
+    if not allowed:
+        log_line("HOOK_BLOCKED argv0=%s 未在 hook_whitelist 目录内，拒绝执行（白名单配置见 config.http.hook_whitelist）" % exe)
+        return ""
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
         log_line("HOOK exit=%s argv=%s" % (proc.returncode, " ".join(mask_argv(argv))))

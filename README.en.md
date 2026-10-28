@@ -10,8 +10,8 @@ Use when you need to download legally authorized files from cloud drives on macO
 
 ## Quick start
 ```bash
-python3 scripts/pan.py setup --mode local --root <download-dir> --port 17890
-python3 scripts/pan.py get "<link>" --to <download-dir>
+bash scripts/pan.sh setup --mode local --root <download-dir> --port 17890
+bash scripts/pan.sh get "<link>" --to <download-dir>
 ```
 
 ## Install across the three platforms

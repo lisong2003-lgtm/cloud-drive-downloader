@@ -308,6 +308,18 @@ def cmd_get(args):
     rc = 1
     try:
         split = resolve_split_count(cfg, args)
+        if split <= 1 and plan.get("engine") == "http" and is_http_url(args.url):
+            # F1（v0.20.0）：用户没显式要分片时，测速自动决策——单连接被限且支持 Range 就切分片。
+            try:
+                from pancli.engine import auto_split_decision as _auto_split
+                _n, _why = _auto_split(args.url, cfg)
+                if _n > 1:
+                    split = _n
+                    log_line("AUTO_SPLIT n=%d why=%s" % (_n, _why))
+                    if not getattr(args, "json", False):
+                        print("自动分片：%d 段（%s）" % (_n, _why), flush=True)
+            except Exception as _exc:
+                log_line("AUTO_SPLIT skip error=%s" % _exc)
         if split and split > 1 and plan.get("engine") == "http" and is_http_url(args.url):
             target_file = Path(plan["target"]) / filename_from_url(args.url)
             started = datetime.now()

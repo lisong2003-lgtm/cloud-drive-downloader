@@ -1,60 +1,28 @@
-# 网盘通 免客户端一键编排：AList(5244) + rclone(挂载/转存) + aria2(6800 RPC)
-# 用法（NAS/服务器上）：
-#   cd docker && docker compose -f docker-compose.full.yml up -d
-# 首次配置见 references/34-免客户端一键部署.md
+# 网盘通 · 全家桶 compose（含 AList；references/34-免客户端一键部署.md 配套）
+# 用法：docker compose -f docker/docker-compose.full.yml up -d
+# 语法自检：docker compose -f docker/docker-compose.full.yml config
 services:
-  alist:
-    image: xhofe/alist:latest
-    container_name: cdd-alist
+  pandownloader:
+    image: lis/cloud-drive-downloader:0.19.0
+    container_name: pan-downloader
     restart: unless-stopped
-    dns:
-      - 223.5.5.5
-      - 119.29.29.29
     ports:
-      - "5244:5244"
-    volumes:
-      - ../data/alist:/opt/alist/data
-      - ../download:/data/download
+      - "${PAN_WEB_PORT:-17890}:17890"
     environment:
-      - PUID=0
-      - PGID=0
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:5244/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-  aria2:
-    image: p3terx/aria2-pro:latest
-    container_name: cdd-aria2
-    restart: unless-stopped
-    dns:
-      - 223.5.5.5
-      - 119.29.29.29
-    ports:
-      - "6800:6800"
-      - "6888:6888"
-      - "6888:6888/udp"
+      # 非回环部署必须保留 token 鉴权（PAN_NOAUTH 仅回环有效）
+      - PAN_CONFIG=/data/state/config.json
+      - PAN_STATE_DIR=/data/state
     volumes:
-      - ../data/aria2:/config
-      - ../download:/downloads
-    environment:
-      - RPC_SECRET=pan-downloader
-      - RPC_PORT=6800
-      - LISTEN_PORT=6888
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H 'Content-Type: application/json' --data '{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"aria2.getVersion\",\"params\":[\"token:pan-downloader\"]}' http://localhost:6800/jsonrpc"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-  rclone:
-    image: rclone/rclone:latest
-    container_name: cdd-rclone
-    restart: unless-stopped
-    entrypoint: ["sleep", "infinity"]
-    volumes:
-      - ../data/rclone:/config/rclone
-      - ../download:/data/download
+      - ${PAN_STATE_DIR:-./state}:/data/state
+      - ${PAN_DOWNLOAD_DIR:-./download}:/data/download
     depends_on:
-      - alist
+      - cdd-alist
+    command: ["serve", "--host", "0.0.0.0", "--port", "17890"]
+  cdd-alist:
+    image: xhofe/alist:latest
+    container_name: pan-alist
+    restart: unless-stopped
+    ports:
+      - "${ALIST_WEB_PORT:-5244}:5244"
+    volumes:
+      - ${ALIST_DATA_DIR:-./alist-data}:/opt/alist/data
