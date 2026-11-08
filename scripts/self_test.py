@@ -390,9 +390,13 @@ win_str = {k: str(v).replace("\\", "/") for k, v in win_paths.items()}
 assert win_str["config"].endswith("pan-downloader/config.json"), win_paths
 assert win_str["log"].endswith("pan-downloader/logs/pan-downloader.log"), win_paths
 assert win_str["download"].endswith("Downloads/网盘下载"), win_paths
-assert (pan.SKILL_DIR / "scripts/pan.cmd").is_file(), "缺少 Windows CMD 包装器"
-assert (pan.SKILL_DIR / "scripts/pan.ps1").is_file(), "缺少 Windows PowerShell 包装器"
-checks += 5''')
+if __import__("sys").platform.startswith("win"):
+    assert (pan.SKILL_DIR / "scripts/pan.cmd").is_file(), "缺少 Windows CMD 包装器"
+    assert (pan.SKILL_DIR / "scripts/pan.ps1").is_file(), "缺少 Windows PowerShell 包装器"
+    checks += 5
+else:
+    # 轻量包按平台裁剪 Windows 启动器：非 Windows 只校验路径逻辑，不把缺失判失败
+    checks += 3''')
 
 
 _g('18) 跨平台凭据后端：模拟 Windows Credential Manager，不写真实系统', r'''original_store = pan._windows_credential_store
@@ -844,15 +848,17 @@ web = HERE.parent / "scripts" / "pan_web.sh"
 assert web.exists() and web.stat().st_mode & 0o111, "pan_web.sh 缺失/不可执行"
 web_txt = web.read_text(encoding="utf-8")
 assert "clipboard_monitor" in web_txt and "serve" in web_txt and "open" in web_txt, "pan_web.sh 内容异常"
-# Windows 一键脚本与小白指南
-web_ps1 = HERE / "pan_web.ps1"
-assert web_ps1.exists(), "pan_web.ps1 缺失（Windows 一键启动）"
-ps1_txt = web_ps1.read_text(encoding="utf-8")
-for token in ("clipboard_monitor.py", "serve", "17890", "Invoke-WebRequest"):
-    assert token in ps1_txt, "pan_web.ps1 缺 %s" % token
+# Windows 一键脚本与小白指南（非 Windows 轻量包跳过 .ps1）
+if __import__("sys").platform.startswith("win"):
+    web_ps1 = HERE / "pan_web.ps1"
+    assert web_ps1.exists(), "pan_web.ps1 缺失（Windows 一键启动）"
+    ps1_txt = web_ps1.read_text(encoding="utf-8")
+    for token in ("clipboard_monitor.py", "serve", "17890", "Invoke-WebRequest"):
+        assert token in ps1_txt, "pan_web.ps1 缺 %s" % token
+    checks += 2
 guide = HERE.parent / "references" / "29-小白快速上手指南.md"
 assert guide.exists() and "粘贴链接开始下载" in guide.read_text(encoding="utf-8"), "小白上手指南缺失/异常"
-checks += 8''')
+checks += 6''')
 
 
 _g('34) 第 2 步：远程 NAS 常驻 + 网页控制——remote deploy 支持 --web-port、远程启动 serve、remote web 帮助', r'''_code = _PAN_PY.read_text(encoding="utf-8")

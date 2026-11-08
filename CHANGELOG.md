@@ -1,5 +1,12 @@
 ## v0.20.0（2026-10-28 · 提速三件套版）
 
+## 0.20.1 · 2026-11-08 · 技能层瘦身与发布完整性
+
+- **SKILL.md 瘦身**：11,701 B → 7,887 B（-32.6%）。触发词、硬规则、能力边界保留在前置段；低频细则外移到 `references/`、`docs/`、`packs/`，按需加载，算法与业务口径不变。
+- **发布完整性**：被引用文件随包存在、Python/bash/JSON 语法通过、技能自检 PASS；未实现的检查如实记 SKIP。
+- **脱敏**：本机路径、真实项目名与公司资料引用替换为通用示例；平台专用入口只改发布副本。
+
+
 - **F1 自动分片**：http 直链下载前自动决策——探测 Range + 1MB 样本测速，单连接低于 `http.auto_split_threshold_kbps`（默认 1024kbps）自动按 `http.split_max_concurrency`（默认 4）切分片；`run_curl_split` 重写：并发池（跑完补位，不再 N 段全起）、**分片级复用**（完整 `.partNN` 直接跳过，重跑不浪费）、失败段单独重试 1 次、可选 `http.split_limit_rate` 透传 curl 限速。半成品段整段重下（curl 拒绝 `-C -` 与 `-r` 组合，段内续传不可行）。
 - **F2 闲时队列**：`pan idle add|list|delete|run`——队列存 `STATE_DIR/queue/`，`pan idle run` 前台守护在 `http.idle_window`（默认 00:00-08:00，支持跨午夜）内逐个投递（子进程走 `pan get`，单实例锁防重）；`--print-crontab` 只打印条目**不安装**；`PAN_IDLE_FORCE=1` 跳过窗口判断（自测）。Web 设置页新增闲时窗口输入框。
 - **F3 换赛道指南**：新增 `references/42-换赛道提速指南.md`（123 云盘 WebDAV / 夸克离线 / PikPak / 分享方换盘四路径对比与接法），SKILL.md 与 Web 教程页各加指针。
@@ -13,7 +20,7 @@
 - `PAN_NOAUTH=1` 仅在回环绑定下允许关闭鉴权；非回环强制开启并红色警告。
 - Chrome 扩展新增 API Token 输入项；feishu_bot 支持 `--pan-token` 转发鉴权、`--feishu-verify-token` 回调校验，**非回环监听未配 token 直接拒绝启动**。
 - 修复 self_test 缺 `pan.cmd` 崩溃问题：改为分组执行、单项失败不中断（52 组 / 500 项）；补齐 `pan.cmd` 与 `docker/docker-compose.full.yml`（含 cdd-alist）。
-- 移除零引用的 `scripts/credentials.py`（其 Windows PowerShell f-string 拼接存在注入面，统一走 engine.py 的 ctypes 凭据后端）。
+- 移除零引用的独立凭据读取脚本（其 Windows PowerShell f-string 拼接存在注入面，统一走 engine.py 的 ctypes 凭据后端）。
 - `baidu_login` 二维码改写系统临时目录 + 0600 权限（跨平台）；`serve` 帮助文案改为如实描述。
 
 # Changelog
