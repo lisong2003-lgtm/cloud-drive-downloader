@@ -1,3 +1,7 @@
+## 0.20.2 · 2026-11-09 · 常驻注入瘦身
+
+- **description 精简**：技能目录注入的 description 压到 ≤45 字，保留原有触发词与「不做什么」边界；SKILL.md 正文与算法口径未变。
+
 ## v0.20.0（2026-10-28 · 提速三件套版）
 
 ## 0.20.1 · 2026-11-08 · 技能层瘦身与发布完整性
@@ -20,7 +24,7 @@
 - `PAN_NOAUTH=1` 仅在回环绑定下允许关闭鉴权；非回环强制开启并红色警告。
 - Chrome 扩展新增 API Token 输入项；feishu_bot 支持 `--pan-token` 转发鉴权、`--feishu-verify-token` 回调校验，**非回环监听未配 token 直接拒绝启动**。
 - 修复 self_test 缺 `pan.cmd` 崩溃问题：改为分组执行、单项失败不中断（52 组 / 500 项）；补齐 `pan.cmd` 与 `docker/docker-compose.full.yml`（含 cdd-alist）。
-- 移除零引用的独立凭据读取脚本（其 Windows PowerShell f-string 拼接存在注入面，统一走 engine.py 的 ctypes 凭据后端）。
+- 移除零引用的 `scripts/credentials.py`（其 Windows PowerShell f-string 拼接存在注入面，统一走 engine.py 的 ctypes 凭据后端）。
 - `baidu_login` 二维码改写系统临时目录 + 0600 权限（跨平台）；`serve` 帮助文案改为如实描述。
 
 # Changelog

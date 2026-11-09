@@ -2,11 +2,11 @@
 name: cloud-drive-downloader
 slug: cloud-drive-downloader
 displayName: 网盘通
-version: 0.20.1
+version: 0.20.2
 platforms: [macos, windows, linux]
 author: lis
 license: CC-BY-NC-SA-4.0
-description: "网盘下载调度层（Agent/MCP/CLI、Web UI、浏览器插件；macOS/Windows/Linux；local 默认，NAS Docker 可选）。走官方网页会话/官方接口/浏览器直链，不破解登录/付费/限速/风控/DRM；用户自负下载合法性。"
+description: "网盘下载调度层；不破解登录/付费/限速。触发词：网盘通、百度网盘、夸克。"
 metadata:
   version: "0.20.1"
 i18n:
